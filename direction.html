@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Direction Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<style>
+  html, body { overflow-x: hidden; }
+  body { font-family: system-ui, sans-serif; margin: 16px; background: #fafafa; color: #222; }
+  #status { font-size: 14px; margin-bottom: 8px; }
+  b { font-variant-numeric: tabular-nums; }
+  .live { color: #1a7f37; } .done { color: #555; } .err { color: #c00; }
+  .grid { display: grid; gap: 12px; margin-bottom: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px 10px 4px; min-width: 0; }
+  .card h3 { margin: 0 0 2px; font-size: 15px; }
+  .note { font-size: 12px; color: #666; margin-bottom: 4px; }
+  table { border-collapse: collapse; font-size: 13px; width: 100%; margin: 4px 0 8px; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  .sig { color: #1a7f37; font-weight: 600; } .ns { color: #888; } .bad { color: #b2182b; }
+  #config { font: 12px monospace; color: #555; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="status">Loading…</div>
+
+<div class="grid" id="trainRow">
+  <div class="card"><h3>Training</h3>
+    <div class="note">binary cross-entropy (lower is better) · the Oct–Dec 2024 loss picks the saved checkpoint (★)</div>
+    <div id="loss" style="height:260px"></div></div>
+  <div class="card"><h3>Validation direction during training (2025, every hour)</h3>
+    <div class="note">share of next-hour directions called right · dashed = coin flip</div>
+    <div id="hit" style="height:260px"></div></div>
+</div>
+
+<div class="card" style="margin-bottom:12px"><h3>Validation 2025: next-hour direction</h3>
+  <div class="note">[95% range from resampling whole days] · green = range entirely above 50% · top 20% = the model's
+    most confident fifth · big moves = moves over half a typical hour (quote bounce can't decide them)</div>
+  <div id="summary"></div></div>
+
+<div class="grid">
+  <div class="card"><h3>Per coin</h3>
+    <div class="note">bars: hit rate on all hours, with 95% range · dots: most confident 20%</div>
+    <div id="coins" style="height:300px"></div></div>
+  <div class="card"><h3>Hit rate by confidence</h3>
+    <div class="note">predictions sorted into ten equal groups, from least to most confident</div>
+    <div id="conf" style="height:300px"></div></div>
+</div>
+<div class="grid">
+  <div class="card"><h3>Calibration</h3>
+    <div class="note">when the model says "x% chance of up", how often was it up? · diagonal = perfectly calibrated</div>
+    <div id="calib" style="height:300px"></div></div>
+  <div class="card"><h3>What the model uses</h3>
+    <div class="note" id="impNote"></div>
+    <div id="imp" style="height:300px"></div></div>
+</div>
+<div id="config"></div>
+
+<script>
+const run = new URLSearchParams(location.search).get("run") || "direction_lgbm";
+const cfg = { responsive: true, displaylogo: false };
+let data = null;
+const pc = v => `${(100 * v).toFixed(1)}%`;
+const rng = r => `<b>${pc(r[0])}</b> <span class="${r[1] > 0.5 ? "sig" : r[2] < 0.5 ? "bad" : "ns"}">[${pc(r[1])}, ${pc(r[2])}]</span>`;
+
+async function poll() {
+  try {
+    const r = await fetch(`runs/${run}.json?t=${Date.now()}`);
+    if (!r.ok) throw new Error(`runs/${run}.json not found (HTTP ${r.status})`);
+    const d = await r.json();
+    const changed = !data || d.snapshots.length !== data.snapshots.length || d.done !== data.done;
+    data = d;
+    if (changed) draw();
+  } catch (e) { document.getElementById("status").innerHTML = `<span class="err">${e.message}</span>`; }
+  setTimeout(poll, 1500);
+}
+
+function draw() {
+  const snaps = data.snapshots, last = snaps[snaps.length - 1];
+  const state = data.done ? '<span class="done">■ finished</span>' : '<span class="live">● live</span>';
+  document.getElementById("status").innerHTML = `<b>${data.name}</b> (${data.kind}) ${state}` +
+    (last ? ` · step <b>${last.step}</b>` : "") + (data.best_step != null ? ` · saved checkpoint: step <b>${data.best_step}</b>` : "");
+  document.getElementById("config").textContent = JSON.stringify(data.config);
+
+  // Training curves (transformer runs only).
+  document.getElementById("trainRow").style.display = snaps.length ? "" : "none";
+  if (snaps.length) {
+    const st = snaps.map(s => s.step), best = data.best_step;
+    Plotly.react("loss", [
+      { x: st, y: snaps.map(s => s.train_loss), name: "train", line: { color: "#1f77b4" } },
+      { x: st, y: snaps.map(s => s.stop_loss), name: "Oct–Dec 2024", line: { color: "#ff7f0e" } },
+      ...(best != null ? [{ x: [best], y: [snaps.find(s => s.step === best).stop_loss], mode: "markers", name: "saved",
+                            marker: { symbol: "star", size: 14, color: "#ff7f0e" } }] : []),
+    ], { margin: { t: 8, r: 8, b: 36, l: 50 }, xaxis: { title: { text: "step", standoff: 4 } },
+         legend: { orientation: "h", y: -0.25 } }, cfg);
+    Plotly.react("hit", [
+      { x: st, y: snaps.map(s => s.val.hit[0]), name: "all hours", line: { color: "#d62728" } },
+      { x: st, y: snaps.map(s => s.val.top20[0]), name: "most confident 20%", line: { color: "#2ca02c" } },
+      { x: st, y: snaps.map(s => s.val.big[0]), name: "big moves", line: { color: "#9467bd", dash: "dot" } },
+    ], { margin: { t: 8, r: 8, b: 36, l: 50 }, xaxis: { title: { text: "step", standoff: 4 } },
+         yaxis: { tickformat: ".1%" }, legend: { orientation: "h", y: -0.25 },
+         shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0.5, y1: 0.5, line: { color: "#555", dash: "dash", width: 1 } }],
+    }, cfg);
+  }
+
+  // Summary table: this model, reference models, simple rules.
+  const rows = [];
+  if (data.val) rows.push(["<b>this model</b> (final)", data.val.pooled]);
+  else if (last) rows.push(["this model (latest snapshot)", last.val]);
+  if (data.test) rows.push(["<b>this model, TEST Jan–Aug 2026</b>", data.test]);
+  Object.entries(data.reference || {}).forEach(([k, v]) => rows.push([`reference: ${k}`, v]));
+  Object.entries(data.rules || {}).forEach(([k, v]) => rows.push([`rule: ${k}`, v]));
+  document.getElementById("summary").innerHTML = `<table><tr><th></th><th>all hours</th><th>most confident 20%</th>
+    <th>big moves</th><th>IC</th></tr>` + rows.map(([k, s]) => `<tr><td>${k}</td><td>${rng(s.hit)}</td>
+    <td>${rng(s.top20)}</td><td>${rng(s.big)}</td><td>${s.ic >= 0 ? "+" : ""}${s.ic.toFixed(4)}</td></tr>`).join("") + `</table>`;
+
+  const v = data.val;
+  ["coins", "conf", "calib"].forEach(id => { if (!v) Plotly.purge(id); });
+  if (v) {
+    const cs = Object.keys(v.per_coin), pcs = cs.map(c => v.per_coin[c]);
+    Plotly.react("coins", [
+      { type: "bar", x: cs, y: pcs.map(s => s.hit[0]), name: "all hours", marker: { color: "#d62728" },
+        error_y: { type: "data", symmetric: false, array: pcs.map(s => s.hit[2] - s.hit[0]),
+                   arrayminus: pcs.map(s => s.hit[0] - s.hit[1]), color: "#555", thickness: 1 } },
+      { x: cs, y: pcs.map(s => s.top20[0]), mode: "markers", name: "most confident 20%",
+        marker: { color: "#2ca02c", size: 8 } },
+    ], { margin: { t: 8, r: 8, b: 50, l: 50 }, yaxis: { tickformat: ".0%", range: [0.45, 0.62] },
+         legend: { orientation: "h", y: -0.3 },
+         shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0.5, y1: 0.5, line: { color: "#555", dash: "dash", width: 1 } }],
+    }, cfg);
+    Plotly.react("conf", [{ type: "bar", x: v.pooled.by_confidence.map((_, i) => `${i * 10}–${i * 10 + 10}%`),
+      y: v.pooled.by_confidence, marker: { color: v.pooled.by_confidence.map(h => h > 0.5 ? "#2ca02c" : "#b2182b") } }],
+      { margin: { t: 8, r: 8, b: 50, l: 50 }, yaxis: { tickformat: ".0%", range: [0.45, 0.62] },
+        xaxis: { title: { text: "confidence group (least → most)", standoff: 4 } },
+        shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0.5, y1: 0.5, line: { color: "#555", dash: "dash", width: 1 } }],
+      }, cfg);
+    const cal = v.pooled.calibration;
+    if (cal) {
+      const lo = Math.min(...cal.flat()) - 0.01, hi = Math.max(...cal.flat()) + 0.01;
+      Plotly.react("calib", [
+        { x: [lo, hi], y: [lo, hi], mode: "lines", line: { color: "#999", dash: "dash" }, name: "perfect" },
+        { x: cal.map(c => c[0]), y: cal.map(c => c[1]), mode: "lines+markers", name: "model", line: { color: "#d62728" } },
+      ], { margin: { t: 8, r: 8, b: 40, l: 50 }, xaxis: { title: { text: "predicted P(up)", standoff: 4 }, tickformat: ".0%" },
+           yaxis: { title: { text: "actually up", standoff: 4 }, tickformat: ".0%" }, showlegend: false }, cfg);
+    } else Plotly.purge("calib");
+  }
+  const imp = data.importance;
+  document.getElementById("impNote").textContent = imp ? "share of LightGBM's gain per input (top 15)" :
+    "input importance is only reported for LightGBM runs";
+  if (imp) Plotly.react("imp", [{ type: "bar", orientation: "h", x: Object.values(imp).reverse(),
+    y: Object.keys(imp).reverse(), marker: { color: "#1f77b4" } }],
+    { margin: { t: 8, r: 8, b: 30, l: 80 }, xaxis: { tickformat: ".0%" } }, cfg);
+  else Plotly.purge("imp");
+}
+poll();
+</script>
+</body>
+</html>

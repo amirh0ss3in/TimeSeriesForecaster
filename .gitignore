@@ -1,3 +1,6 @@
 ﻿__pycache__/
 data/crypto/
 checkpoints/
+data/crypto_5m/
+data/crypto_perp/
+data/crypto_premium/
