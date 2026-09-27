@@ -1,29 +1,39 @@
 """One model for many series: a single ensemble is trained on several series at once, then forecasts each of them,
 including one it never saw at all (zero-shot).
 
-Usage: python universal.py [--synth=N]    (--synth adds N random synthetic series to the training pool)
+Usage: python universal.py [--synth=N] [--d=64] [--layers=2] [--batch=48] [--steps=3000] [--log-every=500]
+  --synth adds N random synthetic series to the training pool; the others set model width, depth, windows per
+  model per step, training steps and how often a monitor snapshot (a full forecast) is taken.
 
 No leakage: each series is scaled with its own training-part statistics. The held-out series contributes nothing to
 training, not even its past; at forecast time the model only reads its last `ctx` training-part values as context.
 Every training group (each series, and the synthetic pool as a whole) gets an equal share of each batch.
 """
-import math
 import sys
 import time
 
 import numpy as np
 import torch
 
+from data import all_series
 from model import Ensemble, nll, sample_paths
 from monitor import Monitor, crps
 
 # ---- config ----
-synth = int(next((a.split("=")[1] for a in sys.argv if a.startswith("--synth=")), 0))
-name = "universal" + (f"_synth{synth}" if synth else "")
+flag = lambda key, default: int(next((a.split("=")[1] for a in sys.argv if a.startswith(f"--{key}=")), default))
+synth = flag("synth", 0)
+d_model, layers, batch, steps = flag("d", 64), flag("layers", 2), flag("batch", 48), flag("steps", 3000)
+log_every = flag("log-every", 500)       # each snapshot is a full rollout (801 steps for the synthetic series)
+pool_share = flag("pool-share", -1)      # % of each batch for the synthetic pool; -1 = equal share per group
+horizon_cap = flag("horizon", 0)         # forecast/score only the first N test points (quick checks); 0 = all
+scale_prefix = flag("scale-prefix", 0)   # causal scale normalization from the window's first N values; 0 = off
+name = ("universal" + (f"_synth{synth}" if synth else "")
+        + (f"_d{d_model}_l{layers}_b{batch}" if (d_model, layers, batch) != (64, 2, 48) else "")
+        + (f"_pool{pool_share}" if pool_share >= 0 else "") + (f"_h{horizon_cap}" if horizon_cap else "")
+        + (f"_s{steps}" if steps != 3000 else "") + (f"_scale{scale_prefix}" if scale_prefix else ""))
 ctx = 128                     # one shared context length for all series
-d_model, heads, layers = 64, 4, 2
-steps, lr, log_every = 3000, 1e-3, 500   # each snapshot is an ~20 s rollout (801 steps for the synthetic series)
-n_models, batch, n_paths = 5, 48, 100
+heads, lr = 4, 1e-3
+n_models, n_paths = 5, 100
 seed = 0
 
 torch.manual_seed(seed)
@@ -31,31 +41,11 @@ dev = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # ---- series: (x_train, y_train, x_test, y_test, x_unit) ----
-def synthetic(f, noise=0.0):
-    """Same data as train.py's synthetic signals: train on [0, 24π), test on [24π, 64π]."""
-    h = math.pi / 20
-    x_tr, x_te = np.arange(480) * h, (480 + np.arange(801)) * h
-    rng = np.random.default_rng(seed)
-    y_tr = f(x_tr) + noise * rng.standard_normal(len(x_tr))
-    return x_tr, y_tr, x_te, f(x_te) + noise * rng.standard_normal(len(x_te)), "pi"
-
-
-def real(file, delim, split_year):
-    rows = [line for line in open(file) if line[:1].isdigit()]
-    r = np.loadtxt(rows, delimiter=delim, usecols=(2, 3))    # decimal year, value
-    tr = r[:, 0] < split_year
-    return r[tr, 0], r[tr, 1], r[~tr, 0], r[~tr, 1], "year"
-
-
-SERIES = {
-    "sin": synthetic(np.sin),
-    "trend": synthetic(lambda x: np.sin(x) + 0.1 * x),
-    "amp (noise 0.3)": synthetic(lambda x: 0.1 * x * np.sin(x), 0.3),
-    "sunspots": real("data/sunspots.csv", ";", 1990),
-    "co2": real("data/co2.csv", ",", 2010),
-}
+SERIES = all_series(horizon_cap)
 HELD_OUT = {"co2"}            # never used in training: zero-shot
 REFERENCE = {"amp (noise 0.3)": 6.32, "sunspots": 21.45, "co2": 6.89}   # test CRPS of the single-series models
+if horizon_cap:               # shorter test ranges: the full-range references no longer compare
+    REFERENCE = {}
 
 
 def random_series(rng, T=1024):
@@ -78,14 +68,19 @@ if synth:
     rng = np.random.default_rng(seed + 1)
     groups["synthetic pool"] = [(y - y.mean()) / y.std() for y in (random_series(rng) for _ in range(synth))]
 
+# Share of each batch per group: equal, or the pool gets pool_share % and the real series split the rest.
+n_real = len(groups) - ("synthetic pool" in groups)
+share = {g: (pool_share / 100 if g == "synthetic pool" else (1 - pool_share / 100) / n_real)
+         if pool_share >= 0 and "synthetic pool" in groups else 1 / len(groups) for g in groups}
+
 # All series in one buffer; a window is ctx+1 consecutive values of one series, drawn with its group's share.
 chunks, starts, probs, offset = [], [], [], 0
-for arrays in groups.values():
+for g, arrays in groups.items():
     n_win = sum(len(a) - ctx for a in arrays)
     for a in arrays:
         chunks.append(a)
         starts.append(offset + np.arange(len(a) - ctx))
-        probs.append(np.full(len(a) - ctx, 1 / (len(groups) * n_win)))
+        probs.append(np.full(len(a) - ctx, share[g] / n_win))
         offset += len(a)
 Z = torch.tensor(np.concatenate(chunks), dtype=torch.float32, device=dev)
 starts = torch.tensor(np.concatenate(starts), device=dev)
@@ -99,7 +94,8 @@ def windows(i):
 
 
 # ---- model ----
-model = Ensemble(n_models, ctx, d_model, heads, layers).to(dev)
+model = Ensemble(n_models, ctx, d_model, heads, layers, scale_prefix=scale_prefix).to(dev)
+fv = model.first_valid        # positions before this would see offset/scale computed from their own targets
 opt = torch.optim.AdamW(model.parameters(), lr=lr)
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
 
@@ -115,7 +111,8 @@ def forecast():
 
 
 # ---- train ----
-cfg = dict(train_groups=list(groups), held_out=sorted(HELD_OUT), synth=synth, ctx=ctx, d_model=d_model, heads=heads,
+cfg = dict(train_groups=list(groups), batch_share={g: round(v, 3) for g, v in share.items()},
+           held_out=sorted(HELD_OUT), synth=synth, horizon=horizon, scale_prefix=scale_prefix, ctx=ctx, d_model=d_model, heads=heads,
            layers=layers, steps=steps, lr=lr, n_models=n_models, batch=batch, n_paths=n_paths,
            train_windows=len(starts), params_per_model=sum(p.numel() for p in model.parameters()) // n_models)
 print(cfg)
@@ -127,12 +124,13 @@ t0 = time.time()
 for step in range(steps + 1):
     idx = torch.multinomial(p_win, n_models * batch, replacement=True).view(n_models, batch)  # own batch per model
     x, y = windows(idx)
-    loss = nll(*model(x), y)
+    mean, log_sigma = model(x)
+    loss = nll(mean[..., fv:], log_sigma[..., fv:], y[..., fv:])
     if step % log_every == 0 or step == steps:
         paths = forecast()
         with torch.no_grad():
             xm, ym = windows(mse_idx.expand(n_models, -1))
-            mse = ((model(xm)[0] - ym) ** 2).mean().item()
+            mse = ((model(xm)[0][..., fv:] - ym[..., fv:]) ** 2).mean().item()
         scores = mon.log(step, mse, paths)
         print(f"step {step:5d}  nll {loss.item():+.3f}  one-step mse {mse:.2e}  crps "
               + "  ".join(f"{k} {v:.2f}" for k, v in scores.items()) + f"  ({time.time() - t0:.0f}s)")

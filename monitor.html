@@ -32,6 +32,12 @@
   <input id="slider" type="range" min="0" max="0" value="0">
   <span id="stepLabel"></span>
 </div>
+<div id="matrixCard" class="card" style="display:none; margin-bottom:12px">
+  <h3>Skill after each stage <span class="stats">CRPS ÷ climatology CRPS · blue beats climatology, red is worse ·
+    outlined = just trained on · right of it = not trained on yet (transfer) · left = trained earlier (forgetting) ·
+    click a row to show it below</span></h3>
+  <div id="matrix" style="height:300px"></div>
+</div>
 <div id="panels" class="grid"></div>
 <div id="bottom" class="grid">
   <div class="card"><h3>Training loss (one-step MSE)</h3><div id="loss" class="small"></div></div>
@@ -138,10 +144,11 @@ function draw() {
   const snaps = data.snapshots, snap = snaps[idx];
   const state = data.done ? '<span class="done">■ finished</span>' : '<span class="live">● live</span>';
   document.getElementById("status").innerHTML = snap
-    ? `<b>${data.name}</b> ${state} · snapshot ${idx + 1}/${snaps.length} · step <b>${snap.step}</b> · train loss <b>${fmt(snap.loss)}</b>`
+    ? `<b>${data.name}</b> ${state} · snapshot ${idx + 1}/${snaps.length}${snap.label ? ` · <b>${snap.label}</b>` : ""} · step <b>${snap.step}</b> · train loss <b>${fmt(snap.loss)}</b>`
     : `<b>${data.name}</b> ${state} · waiting for first snapshot…`;
   document.getElementById("stepLabel").textContent = snap ? `step ${snap.step}` : "";
   document.getElementById("config").textContent = JSON.stringify(data.config);
+  drawMatrix(snaps);
   keys().forEach((k, i) => drawSeries(k, i, snap));
 
   const upTo = snaps.slice(0, idx + 1), steps = upTo.map(q => q.step);
@@ -161,6 +168,44 @@ function draw() {
     ...small, yaxis: { type: "log" }, legend: { orientation: "h", y: -0.3, font: { size: 11 } },
     shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 1, y1: 1, line: { color: "#999", dash: "dash", width: 1 } }],
   }, { responsive: true, displaylogo: false });
+}
+
+// Results grid for labelled runs (e.g. sequential stages): rows = snapshots, columns = series, cell = skill.
+function drawMatrix(snaps) {
+  const card = document.getElementById("matrixCard");
+  if (!snaps.some(s => s.label)) { card.style.display = "none"; return; }
+  card.style.display = "";
+  const cols = keys(), rows = snaps.map(s => s.label || `step ${s.step}`);
+  const skill = snaps.map(s => cols.map(k => {
+    const v = s.series[k] && s.series[k].score, c = data.series[k].clim;
+    return v == null || !c ? null : v / c;
+  }));
+  const shapes = [];
+  snaps.forEach((s, i) => cols.forEach((k, j) => {
+    if (s.trained === k) shapes.push({ type: "rect", x0: j - 0.5, x1: j + 0.5, y0: i - 0.5, y1: i + 0.5,
+                                       line: { color: "#222", width: 2 } });
+  }));
+  shapes.push({ type: "rect", xref: "paper", x0: 0, x1: 1, y0: idx - 0.5, y1: idx + 0.5,
+                line: { color: "#d62728", width: 3 } });   // the row shown in the panels below
+  Plotly.react("matrix", [{
+    type: "heatmap", x: cols, y: rows, z: skill.map(r => r.map(v => v == null ? null : Math.log10(v))),
+    text: skill.map(r => r.map(v => v == null ? "" : v.toFixed(2))), texttemplate: "%{text}",
+    hovertemplate: "%{y} · %{x}<br>skill %{text}<extra></extra>",
+    colorscale: [[0, "#2166ac"], [0.5, "#f7f7f7"], [1, "#b2182b"]], zmin: -1.5, zmax: 1.5,
+    colorbar: { title: { text: "skill" }, tickvals: [-1, 0, 1], ticktext: ["0.1", "1", "10"], thickness: 12 },
+  }], {
+    margin: { t: 34, r: 8, b: 8, l: 160 }, shapes,
+    yaxis: { autorange: "reversed", type: "category" }, xaxis: { type: "category", side: "top" },
+  }, { responsive: true, displaylogo: false });
+  const el = document.getElementById("matrix");
+  el._rows = rows;  // the click handler below is bound once; it reads the current rows from here
+  if (!el._clickBound) {
+    el.on("plotly_click", e => {
+      const row = el._rows.indexOf(e.points[0].y);
+      if (row >= 0) { idx = row; slider.value = idx; follow = idx === +slider.max; draw(); }
+    });
+    el._clickBound = true;
+  }
 }
 
 slider.oninput = () => {

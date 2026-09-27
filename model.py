@@ -46,9 +46,12 @@ class Block(nn.Module):
 
 
 class Ensemble(nn.Module):
-    def __init__(self, n_models, ctx, d_model=64, heads=4, layers=2, window_norm=True):
+    def __init__(self, n_models, ctx, d_model=64, heads=4, layers=2, window_norm=True, scale_prefix=0):
+        """scale_prefix=k > 0: causal scale normalization — offset and scale come from the window's first k values
+        (mean, std + 0.1), so predictions are only leak-free from position k-1 on; train on `first_valid` onward."""
         super().__init__()
-        self.n_models, self.ctx, self.window_norm = n_models, ctx, window_norm
+        self.n_models, self.ctx, self.window_norm, self.scale_prefix = n_models, ctx, window_norm, scale_prefix
+        self.first_valid = max(scale_prefix - 1, 0)
         self.inp = ELinear(n_models, 1, d_model)
         self.pos = nn.Parameter(torch.randn(n_models, 1, ctx, d_model) * 0.02)
         self.blocks = nn.Sequential(*[Block(n_models, d_model, heads) for _ in range(layers)])
@@ -57,10 +60,15 @@ class Ensemble(nn.Module):
     def forward(self, x):                            # x: (E, B, T), T <= ctx
         # Per-window normalization: values are taken relative to the window's first value, so the model only
         # sees the shape, not the absolute level. The first value is in the past for every position (causal).
-        off = x[..., :1] if self.window_norm else 0.0
+        # With scale_prefix, the level and size both come from the first k values instead.
+        off, scale = (x[..., :1] if self.window_norm else 0.0), 1.0
+        if self.scale_prefix:
+            prefix = x[..., :self.scale_prefix]
+            off, scale = prefix.mean(-1, keepdim=True), prefix.std(-1, keepdim=True) + 0.1
         T = x.shape[-1]
-        out = self.out(self.blocks(self.inp((x - off)[..., None]) + self.pos[:, :, :T]))
-        return out[..., 0] + off, out[..., 1].clamp(-7, 3)   # next-value mean and log σ at each position
+        out = self.out(self.blocks(self.inp(((x - off) / scale)[..., None]) + self.pos[:, :, :T]))
+        log_scale = torch.log(scale) if self.scale_prefix else 0.0
+        return out[..., 0] * scale + off, out[..., 1].clamp(-7, 3) + log_scale   # next-value mean, log σ
 
 
 def nll(mean, log_sigma, target):

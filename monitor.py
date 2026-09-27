@@ -49,9 +49,13 @@ class Monitor:
         self._write()
         print(f"Monitor: http://localhost:8000/monitor.html?run={name}")
 
-    def log(self, step, loss, paths):
-        """paths: {series name: (n_paths, T) sampled forecast}. Returns {series name: test CRPS}."""
+    def log(self, step, loss, paths, label=None, trained=None):
+        """paths: {series name: (n_paths, T) sampled forecast}. Returns {series name: test CRPS}.
+        label: optional snapshot name (e.g. "after sunspots"); trained: the series just trained on, if any.
+        Labelled runs get a results grid (snapshots x series) in the monitor."""
         snap, scores = {"step": int(step), "loss": float(loss) if np.isfinite(loss) else None, "series": {}}, {}
+        if label:
+            snap["label"], snap["trained"] = label, trained
         for k, p in paths.items():
             p = np.asarray(p, dtype=float)
             y = self.y_test[k]
