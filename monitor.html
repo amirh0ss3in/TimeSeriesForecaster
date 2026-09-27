@@ -176,6 +176,7 @@ function drawMatrix(snaps) {
   if (!snaps.some(s => s.label)) { card.style.display = "none"; return; }
   card.style.display = "";
   const cols = keys(), rows = snaps.map(s => s.label || `step ${s.step}`);
+  document.getElementById("matrix").style.height = `${60 + 34 * rows.length}px`;  // grows with the stages
   const skill = snaps.map(s => cols.map(k => {
     const v = s.series[k] && s.series[k].score, c = data.series[k].clim;
     return v == null || !c ? null : v / c;
@@ -194,7 +195,7 @@ function drawMatrix(snaps) {
     colorscale: [[0, "#2166ac"], [0.5, "#f7f7f7"], [1, "#b2182b"]], zmin: -1.5, zmax: 1.5,
     colorbar: { title: { text: "skill" }, tickvals: [-1, 0, 1], ticktext: ["0.1", "1", "10"], thickness: 12 },
   }], {
-    margin: { t: 34, r: 8, b: 8, l: 160 }, shapes,
+    margin: { t: 34, r: 8, b: 8, l: 200 }, shapes,
     yaxis: { autorange: "reversed", type: "category" }, xaxis: { type: "category", side: "top" },
   }, { responsive: true, displaylogo: false });
   const el = document.getElementById("matrix");
