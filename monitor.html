@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 16px; background: #fafafa; color: #222; }
+  #status { font-size: 14px; margin-bottom: 8px; }
+  #status b { font-variant-numeric: tabular-nums; }
+  .live { color: #1a7f37; } .done { color: #555; } .err { color: #c00; }
+  #controls { display: flex; gap: 10px; align-items: center; margin: 8px 0 12px; }
+  #slider { flex: 1; }
+  #config { font: 12px monospace; color: #555; white-space: pre-wrap; }
+  html, body { overflow-x: hidden; }
+  .plot { background: #fff; border: 1px solid #ddd; margin-bottom: 12px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="status">Loading…</div>
+<div id="controls">
+  <button id="play">▶ Replay</button>
+  <input id="slider" type="range" min="0" max="0" value="0">
+  <span id="stepLabel"></span>
+</div>
+<div id="forecast" class="plot" style="height:380px"></div>
+<div id="loss" class="plot" style="height:280px"></div>
+<div id="config"></div>
+
+<script>
+const run = new URLSearchParams(location.search).get("run") || "dummy";
+const slider = document.getElementById("slider");
+const playBtn = document.getElementById("play");
+let data = null, idx = 0, follow = true, timer = null;
+const PI = Math.PI, byPi = a => a.map(v => v / PI);
+
+async function poll() {
+  try {
+    const r = await fetch(`runs/${run}.json?t=${Date.now()}`);
+    if (!r.ok) throw new Error(`runs/${run}.json not found (HTTP ${r.status})`);
+    const d = await r.json();
+    const changed = !data || d.snapshots.length !== data.snapshots.length || d.done !== data.done;
+    if (data && d.snapshots.length < data.snapshots.length) follow = true;  // a new run replaced the old file
+    data = d;
+    if (changed) {
+      slider.max = Math.max(0, data.snapshots.length - 1);
+      if (follow) idx = +slider.max;
+      slider.value = idx;
+      draw();
+    }
+  } catch (e) {
+    document.getElementById("status").innerHTML = `<span class="err">${e.message}</span>`;
+  }
+  setTimeout(poll, 1000);  // keep polling even after "done", so re-running the script shows up live
+}
+
+function draw() {
+  const snaps = data.snapshots, s = snaps[idx];
+  const state = data.done ? '<span class="done">■ finished</span>' : '<span class="live">● live</span>';
+  const fmt = v => v == null ? "—" : v.toExponential(3);
+  document.getElementById("status").innerHTML = s
+    ? `<b>${data.name}</b> ${state} · snapshot ${idx + 1}/${snaps.length} · step <b>${s.step}</b> · train loss <b>${fmt(s.loss)}</b> · test RMSE <b>${fmt(s.rmse)}</b>`
+    : `<b>${data.name}</b> ${state} · waiting for first snapshot…`;
+  document.getElementById("stepLabel").textContent = s ? `step ${s.step}` : "";
+  document.getElementById("config").textContent = JSON.stringify(data.config);
+
+  // Forecast plot: fixed y-range from the true curve so a diverging forecast doesn't rescale everything.
+  const yAll = data.y_train.concat(data.y_test).filter(v => v != null);
+  const yLo = Math.min(...yAll), yHi = Math.max(...yAll), pad = 0.3 * (yHi - yLo || 1);
+  const xTr = byPi(data.x_train), xTe = byPi(data.x_test);
+  // Optional band (upper edge invisible, lower edge filled up to it) and a few sampled paths.
+  const extra = [];
+  if (s && s.lo) {
+    extra.push({ x: xTe, y: s.hi, line: { width: 0 }, showlegend: false, hoverinfo: "skip" },
+               { x: xTe, y: s.lo, line: { width: 0 }, fill: "tonexty", fillcolor: "rgba(214,39,40,0.18)",
+                 name: "95% band", hoverinfo: "skip" });
+  }
+  (s && s.samples || []).forEach((p, i) => extra.push(
+    { x: xTe, y: p, name: "sampled path", showlegend: i === 0, hoverinfo: "skip",
+      line: { color: "rgba(214,39,40,0.35)", width: 1 } }));
+  Plotly.react("forecast", [
+    ...extra,
+    { x: xTr, y: data.y_train, name: "true (train)", line: { color: "#999" } },
+    { x: xTe, y: data.y_test, name: "true (test)", line: { color: "#999", dash: "dot" } },
+    { x: xTe, y: s ? s.forecast : [], name: "forecast (median)", line: { color: "#d62728", width: 2 } },
+  ], {
+    title: { text: "Autoregressive forecast over the test range", font: { size: 14 } },
+    margin: { t: 36, r: 16, b: 40, l: 48 },
+    xaxis: { title: "x / π" }, yaxis: { range: [yLo - pad, yHi + pad] },
+    shapes: [{ type: "rect", xref: "x", yref: "paper", x0: xTr[0], x1: xTr[xTr.length - 1], y0: 0, y1: 1,
+               fillcolor: "#1f77b4", opacity: 0.08, line: { width: 0 } }],
+    annotations: [{ x: xTr[0], y: 1, xref: "x", yref: "paper", text: "training region", showarrow: false,
+                    xanchor: "left", yanchor: "top", font: { color: "#1f77b4", size: 11 } }],
+    legend: { orientation: "h", y: -0.18 },
+  }, { responsive: true });
+
+  // Loss plot: everything up to the selected snapshot.
+  const upTo = snaps.slice(0, idx + 1), steps = upTo.map(q => q.step);
+  const allSteps = snaps.map(q => q.step);
+  Plotly.react("loss", [
+    { x: steps, y: upTo.map(q => q.loss), name: "train loss (one-step MSE)", line: { color: "#1f77b4" } },
+    { x: steps, y: upTo.map(q => q.rmse), name: "test RMSE (display only)", line: { color: "#d62728", dash: "dot" } },
+  ], {
+    margin: { t: 16, r: 16, b: 40, l: 56 },
+    xaxis: { title: "step", range: allSteps.length ? [allSteps[0], allSteps[allSteps.length - 1]] : undefined },
+    yaxis: { type: "log" }, legend: { orientation: "h", y: -0.25 },
+  }, { responsive: true });
+}
+
+slider.oninput = () => {
+  idx = +slider.value;
+  follow = idx === +slider.max;  // dragging to the end resumes live-follow
+  draw();
+};
+
+playBtn.onclick = () => {
+  if (timer) { clearInterval(timer); timer = null; playBtn.textContent = "▶ Replay"; return; }
+  if (!data || !data.snapshots.length) return;
+  follow = false; idx = 0; playBtn.textContent = "⏸ Pause";
+  timer = setInterval(() => {
+    idx = Math.min(idx + 1, +slider.max);
+    slider.value = idx; draw();
+    if (idx === +slider.max) { clearInterval(timer); timer = null; follow = true; playBtn.textContent = "▶ Replay"; }
+  }, 120);
+};
+
+poll();
+</script>
+</body>
+</html>
