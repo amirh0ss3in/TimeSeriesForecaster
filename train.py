@@ -1,10 +1,11 @@
 """Ensemble of decoder-only transformers, next-value prediction, forecast of an unseen range by sampling (like an LLM).
 
 Usage: python train.py <signal> [--raw] [--noise=STD]
-  signal: sin | trend | amp | sunspots;  --raw turns off per-window normalization;  --noise adds Gaussian observation
-  noise to both training and test data of a synthetic signal (fixed seed). The forecast is scored against the noisy
-  test values.
+  signal: sin | trend | amp (synthetic) or sunspots | co2 (real, see DATASETS);  --raw turns off per-window
+  normalization;  --noise adds Gaussian observation noise to both training and test data of a synthetic signal
+  (fixed seed). The forecast is scored against the noisy test values.
   sunspots: SILSO monthly mean total sunspot number (data/sunspots.csv); train before 1990, test from 1990 on.
+  co2: NOAA Mauna Loa monthly mean CO2 in ppm (data/co2.csv); train before 2010, test from 2010 on.
 
 Ensemble: `n_models` independent transformers (different random init), stored as one set of stacked weights so all
 of them train and forecast together in single batched GPU calls.
@@ -29,22 +30,25 @@ SIGNALS = {
     "trend": lambda x: np.sin(x) + 0.1 * x,
     "amp": lambda x: 0.1 * x * np.sin(x),
 }
+DATASETS = {  # name: (file, delimiter, split year, context in months, batch) — columns 2, 3 = decimal year, value
+    "sunspots": ("data/sunspots.csv", ";", 1990, 132, 48),   # context ~ one 11-year solar cycle
+    "co2": ("data/co2.csv", ",", 2010, 36, 144),             # context = three yearly cycles
+}
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 signal_name = args[0] if args else "sin"
-sunspots = signal_name == "sunspots"
+real = signal_name in DATASETS
 window_norm = "--raw" not in sys.argv
 noise = float(next((a.split("=")[1] for a in sys.argv if a.startswith("--noise=")), 0))  # observation noise std
 name = signal_name + (f"_noise{noise:g}" if noise else "") + ("" if window_norm else "_raw")
 n, m = 24, 40          # synthetic: train on [0, nπ), test on [nπ, (n+m)π]
 pts_per_pi = 20        # synthetic sampling: h = π/20, so one period = 40 points
-split_year = 1990      # sunspots: train before, test from here on
-ctx = 132 if sunspots else 40   # context window: ~one solar cycle (months) / one period
+ctx, batch = 40, 128   # synthetic: context = one period; random training windows per model per step
+if real:
+    data_file, delim, split_year, ctx, batch = DATASETS[signal_name]   # batch keeps ~same tokens per step
 d_model, heads, layers = 64, 4, 2
 steps, lr = 3000, 1e-3
-log_every = 200 if sunspots else 100   # each snapshot runs a full forecast, which is slower for long contexts
-n_models = 5          # ensemble size
-batch = 48 if sunspots else 128   # random training windows per model per step (each model draws its own);
-                                  # ~same tokens per step for both context lengths
+log_every = 200 if real else 100   # each snapshot runs a full forecast
+n_models = 5          # ensemble size (each model draws its own random batch)
 n_paths = 100          # sampled forecast paths (split evenly across models)
 seed = 0
 
@@ -53,8 +57,9 @@ np.random.seed(seed)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ---- data ----
-if sunspots:
-    raw = np.loadtxt("data/sunspots.csv", delimiter=";", usecols=(2, 3))   # decimal year, monthly sunspot number
+if real:
+    rows = [line for line in open(data_file) if line[:1].isdigit()]    # skip comment and header lines
+    raw = np.loadtxt(rows, delimiter=delim, usecols=(2, 3))            # decimal year, value
     tr = raw[:, 0] < split_year
     x_train, y_train, x_test, y_test = raw[tr, 0], raw[tr, 1], raw[~tr, 0], raw[~tr, 1]
     clean_test = None
@@ -67,7 +72,7 @@ else:
     rng = np.random.default_rng(seed)
     y_train = signal(x_train) + noise * rng.standard_normal(len(x_train))
     y_test = clean_test + noise * rng.standard_normal(len(x_test))
-fmt_x = (lambda v: f"{v:.0f}") if sunspots else (lambda v: f"{v / math.pi:.0f}π")
+fmt_x = (lambda v: f"{v:.0f}") if real else (lambda v: f"{v / math.pi:.0f}π")
 
 # Normalization uses training data only.
 mu, sd = y_train.mean(), y_train.std()
@@ -162,8 +167,8 @@ def forecast():
 
 
 # ---- train ----
-cfg = dict(signal=signal_name, x_unit="year" if sunspots else "pi", noise=noise, window_norm=window_norm,
-           **(dict(split_year=split_year) if sunspots else dict(n=n, m=m, pts_per_pi=pts_per_pi)), ctx=ctx,
+cfg = dict(signal=signal_name, x_unit="year" if real else "pi", noise=noise, window_norm=window_norm,
+           **(dict(split_year=split_year) if real else dict(n=n, m=m, pts_per_pi=pts_per_pi)), ctx=ctx,
            d_model=d_model, heads=heads, layers=layers, steps=steps, lr=lr, n_models=n_models, n_paths=n_paths,
            batch=batch, train_windows=len(X), params_per_model=sum(p.numel() for p in model.parameters()) // n_models)
 print(cfg)
