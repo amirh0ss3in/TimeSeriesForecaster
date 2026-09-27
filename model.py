@@ -1,0 +1,85 @@
+"""Ensemble of small decoder-only transformers with stacked weights, so all models train and sample in single
+batched GPU calls. Each model predicts a Gaussian (mean, log σ) for the next value at every position."""
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+# Every weight has a leading ensemble dimension E; activations are shaped (E, B, T, d).
+class ELinear(nn.Module):
+    def __init__(self, E, i, o):
+        super().__init__()
+        self.w = nn.Parameter(torch.empty(E, i, o).uniform_(-i ** -0.5, i ** -0.5))  # nn.Linear-style init
+        self.b = nn.Parameter(torch.zeros(E, 1, o))
+
+    def forward(self, x):
+        s = x.shape
+        return torch.baddbmm(self.b, x.reshape(s[0], -1, s[-1]), self.w).reshape(*s[:-1], -1)
+
+
+class ELayerNorm(nn.Module):
+    def __init__(self, E, d):
+        super().__init__()
+        self.g = nn.Parameter(torch.ones(E, 1, 1, d))
+        self.b = nn.Parameter(torch.zeros(E, 1, 1, d))
+
+    def forward(self, x):
+        return F.layer_norm(x, x.shape[-1:]) * self.g + self.b
+
+
+class Block(nn.Module):
+    """Pre-norm transformer block with causal self-attention."""
+    def __init__(self, E, d, heads):
+        super().__init__()
+        self.heads = heads
+        self.ln1, self.ln2 = ELayerNorm(E, d), ELayerNorm(E, d)
+        self.qkv, self.proj = ELinear(E, d, 3 * d), ELinear(E, d, d)
+        self.fc1, self.fc2 = ELinear(E, d, 4 * d), ELinear(E, 4 * d, d)
+
+    def forward(self, x):
+        E, B, T, d = x.shape
+        q, k, v = (t.reshape(E * B, T, self.heads, d // self.heads).transpose(1, 2)   # models folded into the batch
+                   for t in self.qkv(self.ln1(x)).split(d, -1))
+        a = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        x = x + self.proj(a.transpose(1, 2).reshape(E, B, T, d))
+        return x + self.fc2(F.relu(self.fc1(self.ln2(x))))
+
+
+class Ensemble(nn.Module):
+    def __init__(self, n_models, ctx, d_model=64, heads=4, layers=2, window_norm=True):
+        super().__init__()
+        self.n_models, self.ctx, self.window_norm = n_models, ctx, window_norm
+        self.inp = ELinear(n_models, 1, d_model)
+        self.pos = nn.Parameter(torch.randn(n_models, 1, ctx, d_model) * 0.02)
+        self.blocks = nn.Sequential(*[Block(n_models, d_model, heads) for _ in range(layers)])
+        self.out = ELinear(n_models, d_model, 2)
+
+    def forward(self, x):                            # x: (E, B, T), T <= ctx
+        # Per-window normalization: values are taken relative to the window's first value, so the model only
+        # sees the shape, not the absolute level. The first value is in the past for every position (causal).
+        off = x[..., :1] if self.window_norm else 0.0
+        T = x.shape[-1]
+        out = self.out(self.blocks(self.inp((x - off)[..., None]) + self.pos[:, :, :T]))
+        return out[..., 0] + off, out[..., 1].clamp(-7, 3)   # next-value mean and log σ at each position
+
+
+def nll(mean, log_sigma, target):
+    """Gaussian negative log-likelihood (constant dropped)."""
+    return (log_sigma + 0.5 * ((target - mean) / log_sigma.exp()) ** 2).mean()
+
+
+@torch.no_grad()
+def sample_paths(model, histories, steps, n_paths):
+    """Forecast several series at once, LLM-style: each step samples next ~ N(mean, σ) and feeds it back.
+    histories: (S, ctx) normalized last-context values, one row per series.
+    Returns (S, n_paths, steps); each series' paths are split evenly across the models, ordered model by model."""
+    E, (S, ctx) = model.n_models, histories.shape
+    P = n_paths // E
+    window = histories[None, :, None, :].expand(E, S, P, ctx).reshape(E, S * P, ctx)
+    out = []
+    for _ in range(steps):
+        mean, log_sigma = model(window)
+        nxt = mean[..., -1] + log_sigma[..., -1].exp() * torch.randn_like(mean[..., -1])
+        out.append(nxt)
+        window = torch.cat([window[..., 1:], nxt[..., None]], -1)
+    return torch.stack(out, -1).reshape(E, S, P, steps).transpose(0, 1).reshape(S, E * P, steps)

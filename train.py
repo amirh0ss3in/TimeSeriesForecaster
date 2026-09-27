@@ -21,9 +21,8 @@ import time
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
+from model import Ensemble, nll, sample_paths
 from monitor import Monitor, crps
 
 # ---- config ----
@@ -95,86 +94,14 @@ eff_windows = 1 / (p_win ** 2).sum().item()          # effective number of windo
 
 
 # ---- model ----
-# Every weight has a leading ensemble dimension E, so all models run in the same batched matmuls.
-# Activations are shaped (E, B, T, d).
-class ELinear(nn.Module):
-    def __init__(self, i, o):
-        super().__init__()
-        self.w = nn.Parameter(torch.empty(n_models, i, o).uniform_(-i ** -0.5, i ** -0.5))  # nn.Linear-style init
-        self.b = nn.Parameter(torch.zeros(n_models, 1, o))
-
-    def forward(self, x):
-        s = x.shape
-        return torch.baddbmm(self.b, x.reshape(s[0], -1, s[-1]), self.w).reshape(*s[:-1], -1)
-
-
-class ELayerNorm(nn.Module):
-    def __init__(self, d):
-        super().__init__()
-        self.g = nn.Parameter(torch.ones(n_models, 1, 1, d))
-        self.b = nn.Parameter(torch.zeros(n_models, 1, 1, d))
-
-    def forward(self, x):
-        return F.layer_norm(x, x.shape[-1:]) * self.g + self.b
-
-
-class Block(nn.Module):
-    """Pre-norm transformer block with causal self-attention."""
-    def __init__(self):
-        super().__init__()
-        self.ln1, self.ln2 = ELayerNorm(d_model), ELayerNorm(d_model)
-        self.qkv, self.proj = ELinear(d_model, 3 * d_model), ELinear(d_model, d_model)
-        self.fc1, self.fc2 = ELinear(d_model, 4 * d_model), ELinear(4 * d_model, d_model)
-
-    def forward(self, x):
-        E, B, T, d = x.shape
-        q, k, v = (t.reshape(E * B, T, heads, d // heads).transpose(1, 2)       # models folded into the batch
-                   for t in self.qkv(self.ln1(x)).split(d, -1))
-        a = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        x = x + self.proj(a.transpose(1, 2).reshape(E, B, T, d))
-        return x + self.fc2(F.relu(self.fc1(self.ln2(x))))
-
-
-class Ensemble(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.inp = ELinear(1, d_model)
-        self.pos = nn.Parameter(torch.randn(n_models, 1, ctx, d_model) * 0.02)
-        self.blocks = nn.Sequential(*[Block() for _ in range(layers)])
-        self.out = ELinear(d_model, 2)
-
-    def forward(self, x):                            # x: (E, B, T), T <= ctx
-        # Per-window normalization: values are taken relative to the window's first value, so the model only
-        # sees the shape, not the absolute level. The first value is in the past for every position (causal).
-        off = x[..., :1] if window_norm else 0.0
-        T = x.shape[-1]
-        out = self.out(self.blocks(self.inp((x - off)[..., None]) + self.pos[:, :, :T]))
-        return out[..., 0] + off, out[..., 1].clamp(-7, 3)   # next-value mean and log σ at each position
-
-
-def nll(mean, log_sigma, target):
-    """Gaussian negative log-likelihood (constant dropped)."""
-    return (log_sigma + 0.5 * ((target - mean) / log_sigma.exp()) ** 2).mean()
-
-
-model = Ensemble().to(dev)
+model = Ensemble(n_models, ctx, d_model, heads, layers, window_norm).to(dev)
 opt = torch.optim.AdamW(model.parameters(), lr=lr)
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
 
 
-@torch.no_grad()
 def forecast():
-    """All paths start from the last training window; each step samples the next value and feeds it back.
-    Returns (n_paths, len(x_test)), ordered model by model."""
-    P = n_paths // n_models
-    window = z_train[-ctx:].repeat(n_models, P, 1)   # (E, P, ctx)
-    out = []
-    for _ in range(len(x_test)):
-        mean, log_sigma = model(window)
-        nxt = mean[..., -1] + log_sigma[..., -1].exp() * torch.randn(n_models, P, device=dev)
-        out.append(nxt)
-        window = torch.cat([window[..., 1:], nxt[..., None]], -1)
-    return torch.stack(out, -1).reshape(n_models * P, -1).cpu().numpy() * sd + mu
+    """Sampled paths from the last training window, (n_paths, len(x_test)), in data units."""
+    return sample_paths(model, z_train[None, -ctx:], len(x_test), n_paths)[0].cpu().numpy() * sd + mu
 
 
 # ---- train ----
@@ -183,7 +110,8 @@ cfg = dict(signal=signal_name, x_unit="year" if real else "pi", noise=noise, win
            d_model=d_model, heads=heads, layers=layers, steps=steps, lr=lr, n_models=n_models, n_paths=n_paths,
            batch=batch, half_life=half_life, train_windows=len(X), effective_windows=round(eff_windows), params_per_model=sum(p.numel() for p in model.parameters()) // n_models)
 print(cfg)
-mon = Monitor(name, x_train, y_train, x_test, y_test, config=cfg)
+mon = Monitor(name, {signal_name: dict(x_train=x_train, y_train=y_train, x_test=x_test, y_test=y_test,
+                                      x_unit="year" if real else "pi")}, config=cfg)
 mse_idx = torch.randperm(len(X), device=dev)[:256]   # fixed windows for the monitor's one-step MSE
 t0 = time.time()
 for step in range(steps + 1):
@@ -194,8 +122,7 @@ for step in range(steps + 1):
         paths = forecast()
         with torch.no_grad():                         # one-step MSE on a fixed subset of windows (cheap, comparable)
             mse = ((model(X[mse_idx].expand(n_models, -1, -1))[0] - Y[mse_idx]) ** 2).mean().item()
-        score = mon.log(step, mse, np.median(paths, 0), band=np.percentile(paths, [2.5, 97.5], 0),
-                        samples=paths[::n_paths // n_models][:3], paths=paths)  # samples: 1 path from each of 3 models
+        score = mon.log(step, mse, {signal_name: paths})[signal_name]
         print(f"step {step:5d}  nll {loss.item():+.3f}  one-step mse {mse:.2e}  test crps {score:.4f}"
               f"  ({time.time() - t0:.0f}s)")
     if step == steps:

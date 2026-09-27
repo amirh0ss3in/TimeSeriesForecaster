@@ -6,15 +6,23 @@
 <title>Training Monitor</title>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <style>
+  html, body { overflow-x: hidden; }
   body { font-family: system-ui, sans-serif; margin: 16px; background: #fafafa; color: #222; }
   #status { font-size: 14px; margin-bottom: 8px; }
-  #status b { font-variant-numeric: tabular-nums; }
+  #status b, .stats b { font-variant-numeric: tabular-nums; }
   .live { color: #1a7f37; } .done { color: #555; } .err { color: #c00; }
   #controls { display: flex; gap: 10px; align-items: center; margin: 8px 0 12px; }
   #slider { flex: 1; }
-  #config { font: 12px monospace; color: #555; white-space: pre-wrap; }
-  html, body { overflow-x: hidden; }
-  .plot { background: #fff; border: 1px solid #ddd; margin-bottom: 12px; box-sizing: border-box; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 12px; }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px 8px 0; min-width: 0; }
+  .card h3 { margin: 0 0 2px; font-size: 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .role { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 10px; background: #e8eef7; color: #1f4e8c; }
+  .role.zero { background: #fde8d7; color: #9a3d00; }
+  .stats { font-size: 12px; color: #555; margin-bottom: 2px; }
+  .plot { height: 300px; }
+  .small { height: 260px; }
+  #bottom { margin-top: 12px; }
+  #config { font: 12px monospace; color: #555; white-space: pre-wrap; margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -24,24 +32,39 @@
   <input id="slider" type="range" min="0" max="0" value="0">
   <span id="stepLabel"></span>
 </div>
-<div id="forecast" class="plot" style="height:380px"></div>
-<div id="loss" class="plot" style="height:280px"></div>
+<div id="panels" class="grid"></div>
+<div id="bottom" class="grid">
+  <div class="card"><h3>Training loss (one-step MSE)</h3><div id="loss" class="small"></div></div>
+  <div class="card"><h3>Test skill per series <span class="stats">CRPS ÷ climatology CRPS · below 1 beats climatology · display only</span></h3>
+    <div id="skill" class="small"></div></div>
+</div>
 <div id="config"></div>
 
 <script>
 const run = new URLSearchParams(location.search).get("run") || "dummy";
 const slider = document.getElementById("slider");
 const playBtn = document.getElementById("play");
-let data = null, idx = 0, follow = true, timer = null;
-const PI = Math.PI, byPi = a => a.map(v => v / PI);
-const score = q => q.score ?? q.rmse;                  // older run files stored "rmse"
-const scoreName = () => data.score_name || "test RMSE";
+const COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22"];
+let data = null, idx = 0, follow = true, timer = null, built = "";
+
+// Older run files hold a single series at the top level: wrap them into the multi-series format.
+function normalize(d) {
+  if (d.series) return d;
+  const key = d.config.signal || d.name;
+  return {
+    name: d.name, config: d.config, done: d.done, score_name: d.score_name || "test RMSE",
+    series: { [key]: { x_train: d.x_train, y_train: d.y_train, x_test: d.x_test, y_test: d.y_test,
+                       x_unit: d.config.x_unit || "pi", role: "", reference: null, clim: null } },
+    snapshots: d.snapshots.map(s => ({ step: s.step, loss: s.loss, series: { [key]: {
+      score: s.score ?? s.rmse, cover: null, forecast: s.forecast, lo: s.lo, hi: s.hi, samples: s.samples } } })),
+  };
+}
 
 async function poll() {
   try {
     const r = await fetch(`runs/${run}.json?t=${Date.now()}`);
     if (!r.ok) throw new Error(`runs/${run}.json not found (HTTP ${r.status})`);
-    const d = await r.json();
+    const d = normalize(await r.json());
     const changed = !data || d.snapshots.length !== data.snapshots.length || d.done !== data.done;
     if (data && d.snapshots.length < data.snapshots.length) follow = true;  // a new run replaced the old file
     data = d;
@@ -57,59 +80,87 @@ async function poll() {
   setTimeout(poll, 1000);  // keep polling even after "done", so re-running the script shows up live
 }
 
-function draw() {
-  const snaps = data.snapshots, s = snaps[idx];
-  const state = data.done ? '<span class="done">■ finished</span>' : '<span class="live">● live</span>';
-  const fmt = v => v == null ? "—" : v.toExponential(3);
-  document.getElementById("status").innerHTML = s
-    ? `<b>${data.name}</b> ${state} · snapshot ${idx + 1}/${snaps.length} · step <b>${s.step}</b> · train loss <b>${fmt(s.loss)}</b> · ${scoreName()} <b>${fmt(score(s))}</b>`
-    : `<b>${data.name}</b> ${state} · waiting for first snapshot…`;
-  document.getElementById("stepLabel").textContent = s ? `step ${s.step}` : "";
-  document.getElementById("config").textContent = JSON.stringify(data.config);
+const keys = () => Object.keys(data.series);
+const fmt = v => v == null ? "—" : Math.abs(v) >= 100 || Math.abs(v) < 0.01 ? v.toExponential(2) : v.toFixed(2);
+const pct = v => v == null ? "—" : `${Math.round(100 * v)}%`;
+const toX = (s, a) => s.x_unit === "year" ? a : a.map(v => v / Math.PI);
 
-  // Forecast plot: fixed y-range from the true curve so a diverging forecast doesn't rescale everything.
-  const yAll = data.y_train.concat(data.y_test).filter(v => v != null);
-  const yLo = Math.min(...yAll), yHi = Math.max(...yAll), pad = 0.3 * (yHi - yLo || 1);
-  const inPi = data.config.x_unit !== "year";          // synthetic runs: x in units of π; real data: raw x
-  const xs = a => inPi ? byPi(a) : a;
-  const xTr = xs(data.x_train), xTe = xs(data.x_test);
-  // Optional band (upper edge invisible, lower edge filled up to it) and a few sampled paths.
-  const extra = [];
-  if (s && s.lo) {
-    extra.push({ x: xTe, y: s.hi, line: { width: 0 }, showlegend: false, hoverinfo: "skip" },
-               { x: xTe, y: s.lo, line: { width: 0 }, fill: "tonexty", fillcolor: "rgba(214,39,40,0.18)",
-                 name: "95% band", hoverinfo: "skip" });
-  }
-  (s && s.samples || []).forEach((p, i) => extra.push(
-    { x: xTe, y: p, name: "sampled path", showlegend: i === 0, hoverinfo: "skip",
-      line: { color: "rgba(214,39,40,0.35)", width: 1 } }));
-  Plotly.react("forecast", [
-    ...extra,
-    { x: xTr, y: data.y_train, name: "true (train)", line: { color: "#999" } },
-    { x: xTe, y: data.y_test, name: "true (test)", line: { color: "#999", dash: "dot" } },
-    { x: xTe, y: s ? s.forecast : [], name: "forecast (median)", line: { color: "#d62728", width: 2 } },
-  ], {
-    title: { text: "Autoregressive forecast over the test range", font: { size: 14 } },
-    margin: { t: 36, r: 16, b: 40, l: 48 },
-    xaxis: { title: inPi ? "x / π" : "year" }, yaxis: { range: [yLo - pad, yHi + pad] },
+// One card per series; rebuilt only when the set of series changes.
+function build() {
+  const sig = keys().join("|");
+  if (sig === built) return;
+  built = sig;
+  document.getElementById("panels").innerHTML = keys().map((k, i) => {
+    const s = data.series[k];
+    const role = s.role ? `<span class="role ${s.role.startsWith("zero") ? "zero" : ""}">${s.role}</span>` : "";
+    return `<div class="card"><h3>${k} ${role}</h3><div class="stats" id="stats-${i}"></div>
+            <div id="plot-${i}" class="plot"></div></div>`;
+  }).join("");
+}
+
+function drawSeries(k, i, snap) {
+  const s = data.series[k], p = snap && snap.series[k];
+  const xTr = toX(s, s.x_train), xTe = toX(s, s.x_test);
+  const ref = s.reference != null ? ` · single-series model <b>${fmt(s.reference)}</b>` : "";
+  const clim = s.clim != null ? ` · climatology <b>${fmt(s.clim)}</b>` : "";
+  document.getElementById(`stats-${i}`).innerHTML = p
+    ? `${data.score_name} <b>${fmt(p.score)}</b>${clim}${ref} · in 95% band <b>${pct(p.cover)}</b>` : "waiting…";
+
+  // Default view: the test range plus 60% as much history; y fitted to the truth in that view.
+  const x0 = xTe[0] - 0.6 * (xTe[xTe.length - 1] - xTe[0]), x1 = xTe[xTe.length - 1];
+  const inView = s.y_train.filter((v, j) => xTr[j] >= x0).concat(s.y_test).filter(v => v != null);
+  const yLo = Math.min(...inView), yHi = Math.max(...inView), pad = 0.35 * (yHi - yLo || 1);
+
+  const traces = [];
+  if (p && p.lo) traces.push(
+    { x: xTe, y: p.hi, line: { width: 0 }, showlegend: false, hoverinfo: "skip" },
+    { x: xTe, y: p.lo, line: { width: 0 }, fill: "tonexty", fillcolor: "rgba(214,39,40,0.18)", name: "95% band",
+      hoverinfo: "skip" });
+  (p && p.samples || []).forEach((q, j) => traces.push({ x: xTe, y: q, name: "sampled path", showlegend: j === 0,
+    hoverinfo: "skip", line: { color: "rgba(214,39,40,0.35)", width: 1 } }));
+  traces.push(
+    { x: xTr, y: s.y_train, name: "true (train)", line: { color: "#999", width: 1.2 } },
+    { x: xTe, y: s.y_test, name: "true (test)", line: { color: "#555", width: 1.2, dash: "dot" } },
+    { x: xTe, y: p ? p.forecast : [], name: "median", line: { color: "#d62728", width: 2 } });
+  Plotly.react(`plot-${i}`, traces, {
+    uirevision: k,  // keep the user's zoom while live updates arrive
+    margin: { t: 6, r: 8, b: 36, l: 44 },
+    xaxis: { title: { text: s.x_unit === "year" ? "year" : "x / π", standoff: 4 }, range: [x0, x1] },
+    yaxis: { range: [yLo - pad, yHi + pad] },
     shapes: [{ type: "rect", xref: "x", yref: "paper", x0: xTr[0], x1: xTr[xTr.length - 1], y0: 0, y1: 1,
-               fillcolor: "#1f77b4", opacity: 0.08, line: { width: 0 } }],
-    annotations: [{ x: xTr[0], y: 1, xref: "x", yref: "paper", text: "training region", showarrow: false,
-                    xanchor: "left", yanchor: "top", font: { color: "#1f77b4", size: 11 } }],
-    legend: { orientation: "h", y: -0.18 },
-  }, { responsive: true });
+               fillcolor: "#1f77b4", opacity: 0.07, line: { width: 0 } }],
+    showlegend: i === 0, legend: { orientation: "h", y: 1.02, yanchor: "bottom", font: { size: 11 } },
+  }, { responsive: true, displaylogo: false });
+}
 
-  // Loss plot: everything up to the selected snapshot.
+function draw() {
+  build();
+  const snaps = data.snapshots, snap = snaps[idx];
+  const state = data.done ? '<span class="done">■ finished</span>' : '<span class="live">● live</span>';
+  document.getElementById("status").innerHTML = snap
+    ? `<b>${data.name}</b> ${state} · snapshot ${idx + 1}/${snaps.length} · step <b>${snap.step}</b> · train loss <b>${fmt(snap.loss)}</b>`
+    : `<b>${data.name}</b> ${state} · waiting for first snapshot…`;
+  document.getElementById("stepLabel").textContent = snap ? `step ${snap.step}` : "";
+  document.getElementById("config").textContent = JSON.stringify(data.config);
+  keys().forEach((k, i) => drawSeries(k, i, snap));
+
   const upTo = snaps.slice(0, idx + 1), steps = upTo.map(q => q.step);
-  const allSteps = snaps.map(q => q.step);
-  Plotly.react("loss", [
-    { x: steps, y: upTo.map(q => q.loss), name: "train loss (one-step MSE)", line: { color: "#1f77b4" } },
-    { x: steps, y: upTo.map(score), name: `${scoreName()} (display only)`, line: { color: "#d62728", dash: "dot" } },
-  ], {
-    margin: { t: 16, r: 16, b: 40, l: 56 },
-    xaxis: { title: "step", range: allSteps.length ? [allSteps[0], allSteps[allSteps.length - 1]] : undefined },
-    yaxis: { type: "log" }, legend: { orientation: "h", y: -0.25 },
-  }, { responsive: true });
+  const xRange = snaps.length ? [snaps[0].step, snaps[snaps.length - 1].step] : undefined;
+  const small = { margin: { t: 8, r: 8, b: 36, l: 50 }, xaxis: { title: { text: "step", standoff: 4 }, range: xRange } };
+  Plotly.react("loss", [{ x: steps, y: upTo.map(q => q.loss), name: "one-step MSE", line: { color: "#1f77b4" } }],
+    { ...small, yaxis: { type: "log" }, showlegend: false }, { responsive: true, displaylogo: false });
+
+  // Skill = CRPS / climatology CRPS; falls back to the raw score for runs without a climatology.
+  const skill = keys().map((k, i) => {
+    const c = data.series[k].clim;
+    return { x: steps, y: upTo.map(q => q.series[k] && q.series[k].score != null ? q.series[k].score / (c || 1) : null),
+             name: k + (data.series[k].role.startsWith("zero") ? " (zero-shot)" : ""),
+             line: { color: COLORS[i % COLORS.length], width: data.series[k].role.startsWith("zero") ? 3 : 1.5 } };
+  });
+  Plotly.react("skill", skill, {
+    ...small, yaxis: { type: "log" }, legend: { orientation: "h", y: -0.3, font: { size: 11 } },
+    shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 1, y1: 1, line: { color: "#999", dash: "dash", width: 1 } }],
+  }, { responsive: true, displaylogo: false });
 }
 
 slider.oninput = () => {
@@ -126,7 +177,7 @@ playBtn.onclick = () => {
     idx = Math.min(idx + 1, +slider.max);
     slider.value = idx; draw();
     if (idx === +slider.max) { clearInterval(timer); timer = null; follow = true; playBtn.textContent = "▶ Replay"; }
-  }, 120);
+  }, 200);
 };
 
 poll();
