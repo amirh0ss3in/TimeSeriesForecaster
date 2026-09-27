@@ -26,8 +26,8 @@ def all_series(horizon=0):
         "sin": synthetic(np.sin),
         "trend": synthetic(lambda x: np.sin(x) + 0.1 * x),
         "amp (noise 0.3)": synthetic(lambda x: 0.1 * x * np.sin(x), 0.3),
-        "sunspots": real("data/sunspots.csv", ";", 1990),
-        "co2": real("data/co2.csv", ",", 2010),
+        "sunspots": real("archive/data/sunspots.csv", ";", 1990),
+        "co2": real("archive/data/co2.csv", ",", 2010),
     }
     if horizon:
         series = {k: (s[0], s[1], s[2][:horizon], s[3][:horizon], s[4]) for k, s in series.items()}

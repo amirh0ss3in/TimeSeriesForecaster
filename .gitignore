@@ -5,3 +5,7 @@ data/crypto_5m/
 data/crypto_perp/
 data/crypto_premium/
 data/crypto_funding/
+external/
+data/universe/
+data/universe_funding/
+data/universe_1h/

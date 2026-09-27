@@ -28,19 +28,23 @@
   <div id="table"></div></div>
 <div class="grid">
   <div class="card"><h3>Monthly net return</h3>
-    <div class="note">dashed green = the 3% goal · maker fees · every period in this run</div>
+    <div class="note">dashed green = the monthly goal · maker fees · every period in this run</div>
     <div id="monthly" style="height:300px"></div></div>
-  <div class="card"><h3>Equity (cumulative net log return)</h3>
-    <div class="note">maker fees · each period starts at 0</div>
+  <div class="card"><h3 id="eqTitle">Equity (cumulative net log return)</h3>
+    <div class="note" id="eqNote">maker fees · each period starts at 0</div>
     <div id="equity" style="height:300px"></div></div>
 </div>
-<div class="card"><h3>Threshold choice on development data (maker fees)</h3>
+<div class="card" id="choiceCard" style="display:none; margin-bottom:12px"><h3>Setting chosen each month</h3>
+  <div class="note">chosen at the start of the month from earlier months only (score = mean monthly net over all
+    earlier months, averaged with the neighbouring entry thresholds); "flat" = no setting scored above 0</div>
+  <div id="choices"></div></div>
+<div class="card" id="gridCard"><h3>Threshold choice on development data (maker fees)</h3>
   <div class="note">entry threshold / exit ratio · bars: mean monthly net (of the worse development period, when the run
     has two) · line: net return per trade · orange = chosen, then used unchanged on later data</div>
   <div id="grid" style="height:280px"></div></div>
 
 <script>
-const run = new URLSearchParams(location.search).get("run") || "backtest_direction";
+const run = new URLSearchParams(location.search).get("run") || "nested";
 const cfg = { responsive: true, displaylogo: false };
 const pc = (v, d = 2) => `${(100 * v).toFixed(d)}%`;
 fetch(`runs/${run}.json?t=${Date.now()}`).then(r => { if (!r.ok) throw new Error(`runs/${run}.json not found`); return r.json(); })
@@ -51,11 +55,27 @@ function draw(d) {
   document.getElementById("status").innerHTML = `<b>${d.name}</b> · predictions: validation <b>${d.val_preds}</b>, test <b>${d.test_preds}</b>`;
   document.getElementById("rules").textContent = `signal: ${d.signal || "prob"} · allocation: ${d.alloc || "slices"} · ` +
     `entry threshold ${d.threshold}` + (d.exit_ratio != null ? `, exit ratio ${d.exit_ratio}` : "") + ` · perpetual futures, no leverage, fees on every position change · goal: > ${pc(goal, 0)} net per month`;
-  document.getElementById("table").innerHTML = `<table><tr><th></th><th>mean month [95% range]</th><th>trades/day</th>
-    <th>hit on trades</th><th>net per trade</th><th>worst drawdown</th></tr>` + Object.entries(R).map(([k, r]) =>
+  const na = (v, f) => v == null ? "—" : f(v);
+  document.getElementById("table").innerHTML = `<table><tr><th></th><th>mean month [95% range]</th><th>total</th>
+    <th>trades/day</th><th>hit on trades</th><th>net per trade</th><th>worst drawdown</th></tr>` + Object.entries(R).map(([k, r]) =>
     `<tr><td>${k}</td><td><b class="${r.monthly_mean > goal ? "good" : r.monthly_mean < 0 ? "bad" : ""}">${pc(r.monthly_mean)}</b>
-      [${pc(r.monthly_ci[0])}, ${pc(r.monthly_ci[1])}]</td><td>${r.trades_per_day.toFixed(1)}</td><td>${pc(r.hit_on_trades, 1)}</td>
-      <td>${pc(r.net_per_trade, 3)}</td><td>${pc(r.max_drawdown, 1)}</td></tr>`).join("") + `</table>`;
+      [${pc(r.monthly_ci[0])}, ${pc(r.monthly_ci[1])}]</td><td>${na(r.total, v => pc(v, 1))}</td>
+      <td>${na(r.trades_per_day, v => v.toFixed(1))}</td><td>${na(r.hit_on_trades, v => pc(v, 1))}</td>
+      <td>${na(r.net_per_trade, v => pc(v, 3))}</td><td>${pc(r.max_drawdown, 1)}</td></tr>`).join("") + `</table>`;
+  const nested = d.nested;
+  document.getElementById("choiceCard").style.display = nested ? "" : "none";
+  document.getElementById("gridCard").style.display = d.grid ? "" : "none";
+  if (nested) {
+    document.getElementById("eqTitle").textContent = "Gain over time (out of sample)";
+    document.getElementById("eqNote").textContent = "cumulative net log return · every month traded with the setting " +
+      "chosen from earlier months only · solid = maker fees, dashed = taker fees";
+    document.getElementById("choices").innerHTML = `<table><tr><th>month</th><th>allocation</th><th>entry</th>
+      <th>exit ratio</th><th>past score</th><th>net, maker</th><th>net, taker</th></tr>` + nested.choices.map(c =>
+      `<tr><td>${c.month}</td><td>${c.alloc}</td><td>${c.alloc === "flat" ? "—" : c.entry}</td>
+       <td>${c.alloc === "flat" ? "—" : c.exit_ratio}</td><td>${pc(c.past_score)}</td>
+       <td class="${c.maker > 0 ? "good" : c.maker < 0 ? "bad" : ""}">${pc(c.maker)}</td>
+       <td class="${c.taker > 0 ? "good" : c.taker < 0 ? "bad" : ""}">${pc(c.taker)}</td></tr>`).join("") + `</table>`;
+  }
 
   const makerKeys = Object.keys(R).filter(k => k.includes("maker"));
   const colors = ["#1f77b4", "#ff7f0e", "#d62728", "#2ca02c"];
@@ -66,11 +86,13 @@ function draw(d) {
     shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: goal, y1: goal, line: { color: "#1a7f37", dash: "dash", width: 2 } },
              { type: "line", xref: "paper", x0: 0, x1: 1, y0: 0, y1: 0, line: { color: "#555", width: 1 } }] }, cfg);
 
-  Plotly.react("equity", makerKeys.map((k, i) => ({
-    x: R[k].equity.map(e => e[0]), y: R[k].equity.map(e => e[1]), name: k.replace(" maker 0.02%", ""),
-    line: { color: colors[i % 4] } })), {
+  const eqKeys = d.nested ? Object.keys(R) : makerKeys;
+  Plotly.react("equity", eqKeys.map((k, i) => ({
+    x: R[k].equity.map(e => e[0]), y: R[k].equity.map(e => e[1]), name: d.nested ? k : k.replace(" maker 0.02%", ""),
+    line: { color: d.nested ? "#1f77b4" : colors[i % 4], dash: k.includes("taker") ? "dash" : "solid" } })), {
     margin: { t: 8, r: 8, b: 40, l: 50 }, yaxis: { tickformat: ".0%" }, legend: { orientation: "h", y: -0.2 } }, cfg);
 
+  if (!d.grid) return;
   const g = d.grid, lab = r => r.exit_ratio == null ? String(r.threshold) : `${r.threshold} / ×${r.exit_ratio}`;
   Plotly.react("grid", [
     { type: "bar", x: g.map(lab), y: g.map(r => r.monthly_mean), name: "mean month",

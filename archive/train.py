@@ -6,8 +6,8 @@ Usage: python train.py <signal> [--raw] [--noise=STD] [--half-life=H]
   signal: sin | trend | amp (synthetic) or sunspots | co2 (real, see DATASETS);  --raw turns off per-window
   normalization;  --noise adds Gaussian observation noise to both training and test data of a synthetic signal
   (fixed seed). The forecast is scored against the noisy test values.
-  sunspots: SILSO monthly mean total sunspot number (data/sunspots.csv); train before 1990, test from 1990 on.
-  co2: NOAA Mauna Loa monthly mean CO2 in ppm (data/co2.csv); train before 2010, test from 2010 on.
+  sunspots: SILSO monthly mean total sunspot number (archive/data/sunspots.csv); train before 1990, test from 1990 on.
+  co2: NOAA Mauna Loa monthly mean CO2 in ppm (archive/data/co2.csv); train before 2010, test from 2010 on.
 
 Ensemble: `n_models` independent transformers (different random init), stored as one set of stacked weights so all
 of them train and forecast together in single batched GPU calls.
@@ -32,8 +32,8 @@ SIGNALS = {
     "amp": lambda x: 0.1 * x * np.sin(x),
 }
 DATASETS = {  # name: (file, delimiter, split year, context in months, batch) — columns 2, 3 = decimal year, value
-    "sunspots": ("data/sunspots.csv", ";", 1990, 132, 48),   # context ~ one 11-year solar cycle
-    "co2": ("data/co2.csv", ",", 2010, 36, 144),             # context = three yearly cycles
+    "sunspots": ("archive/data/sunspots.csv", ";", 1990, 132, 48),   # context ~ one 11-year solar cycle
+    "co2": ("archive/data/co2.csv", ",", 2010, 36, 144),             # context = three yearly cycles
 }
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 signal_name = args[0] if args else "sin"

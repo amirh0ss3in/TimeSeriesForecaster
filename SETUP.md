@@ -1,133 +1,89 @@
-# Hourly crypto direction trading: current setup
+# Daily crypto ranking: current setup
 
-A LightGBM model predicts whether each of 20 large coins will go up or down in the next hour. A trading rule turns
-those predictions into long or short positions on perpetual futures, held until the signal fades. Everything below
-is leak-tested and runs from this folder.
+Every day at 00:00 UTC, a LightGBM model ranks the 20 most-traded coins by their expected return over the next day
+relative to the coin average. The system buys the top 3 and shorts the bottom 3 on perpetual futures, half the capital
+on each side, so the market's overall direction cancels out. The coin list is rebuilt every month from what was
+known at the time, and every result below is out of sample, including the choice of settings.
 
-## Results (net of fees, no leverage)
+## Results (Jan 2022 – Aug 2026, 56 months, net of fees and funding, no leverage)
 
-| Period | Role | Monthly net, maker fees | 95% range | Taker fees | Hit rate on trades |
-|---|---|---|---|---|---|
-| 2025 | development | **+5.9%** | [+0.1, +10.6] | +3.8% | 56% |
-| 2026 Jan–Aug, retrained monthly | development | **+3.5%** | [+0.7, +7.1] | +2.4% | 59% |
-| **2026 Sep 1–26** | **one-time holdout** | **−0.04%** | [−3.4, +2.7] | −0.5% | 68% |
+| Trades filled | Maker fees (0.02%), mean month [95% range] | Taker fees (0.05%) [95% range] | Positive months | Worst drawdown |
+|---|---|---|---|---|
+| At the 00:00 close | +5.9% [+3.4, +8.4] | +5.0% [+2.5, +7.6] | 41/56 | −21% |
+| **1 hour later** | **+5.4%** [+2.7, +8.3] | **+4.4%** [+1.5, +7.4] | 37/56 | −23% |
+| 3 hours later | +5.0% [+2.1, +7.9] | +4.0% [+1.1, +7.1] | 34–37/56 | −27% |
 
-The goal is more than 3% net per month. **It is met on the development months, not yet on the holdout.** Read
-these results with the following in mind:
+- **Every year is positive** at every delay. With a 1-hour delay and taker fees: 2022 +6.7%, 2023 +5.5%,
+  2024 +2.1%, 2025 +4.7%, 2026 (Jan–Aug) +2.7% a month. 2026 is the weakest year so far.
+- **The goal is more than 2% net a month.** The average clears it at every delay and fee level; the lower end of the
+  range with a 1-hour delay and taker fees (+1.5%) doesn't.
+- **Profit is spread across many coins** (best: RUNE, NEAR, WAVES, ENA, BONK, ZIL; worst: WIF, FTM, OP, DOT, BOME).
+- **With today's 20 largest coins instead** (chosen with hindsight), the result is similar: +5.6% a month (maker,
+  no delay).
+- **Not modelled:** slippage on the smaller coins in the list, and the gap between the spot prices used here and
+  the futures prices actually traded. Paper trading measures both.
 
-- **The setting was chosen as the best of 176 combinations** on the development months, so those numbers are
-  optimistic.
-- **The chosen setting is an isolated peak.** An entry threshold of 0.10 or 0.15 instead of 0.12 loses money on the
-  development data (`python crypto_diagnose.py`). A stable edge would degrade gradually around its best setting.
-- **Months swing widely,** from −17% (Oct 2025) to +18% (Mar 2025); 16 of 20 development months were positive.
-  Capital is often concentrated on 1–2 coins, and the worst drawdown in 2025 was 30%.
-- **September was quiet.** The system held positions for only 12 hours. Its calls were right 68% of the time, but
-  the fees from re-splitting capital between coins that signalled at once used up the gross gain of +0.23%.
-- **What is solid:** the next-hour direction edge itself. The model is right about 52% of the time over all hours
-  and 55–59% on its confident calls, with ranges clear of 50% on every period tested. The per-trade result after
-  fees is also positive. Whether that adds up to 3% a month is the open question, and only paper trading on new
-  data can answer it.
+## How it works (`crypto_rank.py`)
 
-## Data (`fetch_crypto.py`)
+- **Coins:** at the start of each month, the 20 coins with the highest USDT spot volume over the previous 30 days,
+  among coins with 90+ days of history and a live perpetual (a funding payment in the last 30 days). 147 different
+  coins pass through the list from 2021 to 2026, including ones that later collapsed or were delisted (LUNA, FTT,
+  WAVES, ...).
+- **Inputs (51):** from each coin's daily candles: moves over 1, 3, 7, 14, 30 and 60 days (also divided by 30-day
+  volatility), 7- and 30-day volatility, volume and trade-count trend, aggressive-buy share over 1 and 7 days,
+  where the close sits in the day's range and in the 30-day range; each also relative to that day's coin average and
+  as a rank among the coins.
+- **Target:** the next H days' log move relative to the coin average.
+- **Model:** LightGBM regression (300 trees, learning rate 0.02, 15 leaves, 300 minimum rows per leaf, row sampling
+  0.7, input sampling 0.5, L2 penalty 10), averaged over 5 random seeds. Retrained at the start of every month on
+  all earlier rows, with an H-day gap.
+- **Portfolio:** long the top K, short the bottom K, weight 0.5/K each; with H > 1, the average of the last H days'
+  portfolios. Candidates H ∈ {1, 3, 7}, K ∈ {3, 5}; each month uses the pair with the best average net return
+  over earlier months (maker fees). It chose **H = 1, K = 3** in every month since mid-2025.
+- **Costs:** fees on every change in a coin's weight; each position pays (long) or receives (short) its coin's
+  funding rate. A position earns weight × the coin's simple move.
 
-Binance's public archive (data.binance.vision), for 20 coins in market-cap order: BTC ETH BNB XRP SOL TRX ZEC DOGE
-LINK ADA XLM BCH NEAR UNI LTC SUI AVAX HBAR TAO SHIB. HYPE, XMR and TON have no archive, so they are skipped.
+## Data
 
 ```bash
-python fetch_crypto.py                        # spot 1h candles     -> data/crypto/        (2017-08 ..)
-python fetch_crypto.py --interval=5m          # spot 5m candles     -> data/crypto_5m/     (last minutes of each hour)
-python fetch_crypto.py --market=perp          # perp futures 1h     -> data/crypto_perp/   (not used by the model)
-python fetch_crypto.py --market=premium       # perp premium index  -> data/crypto_premium/ (not used by the model)
-python fetch_crypto.py --market=funding       # perp funding rates  -> data/crypto_funding/ (backtest costs)
-python fetch_crypto.py --daily                # merge this month's daily files (also with --interval=5m, --market=...)
+python fetch_universe.py            # daily candles + funding for 268 coins ever in the top 40 by volume -> data/universe*/
+python fetch_universe.py --hourly   # hourly closes for them, for the trade-delay test -> data/universe_1h/
+python fetch_crypto.py              # hourly candles for today's 20 largest coins -> data/crypto/ (see below)
 ```
 
-All data folders and `checkpoints/` are git-ignored.
-
-## Features (`crypto_features.py`)
-
-One row per coin and hour t. Every input is known once candle t has closed, and targets are the next candle. Moves
-are divided by a causal volatility estimate (an exponentially weighted average of past squared moves, λ = 0.94), so
-coins are comparable. The 46 inputs (`INPUTS`) are:
-
-- **Own moves:** the last 1, 2, 3 and 4 hours; sums over 6, 24 and 168 hours; move relative to the market.
-- **Candle shape:** where the close sits in the high–low range (the strongest input), wicks, and the share of up
-  hours over the last 6.
-- **Range and activity:** high–low range, volume and trade count relative to the past week, and the volatility
-  regime.
-- **Order flow:** aggressive-buy share of volume, for the last hour, the hour before and the last 6 hours.
-- **Last minutes of the hour (from 5m candles):** moves over the last 5 and 15 minutes, 5-minute volatility, and
-  order flow and volume share of the last 15 minutes.
-- **Context:** market average, BTC and ETH versions of the above, hour of day, weekday.
-
-`python leak_check.py 2026-09-10T05:00` rebuilds the table from data cut off at that date and confirms that no input
-of any earlier hour changes. It passes for all 55 inputs (46 used, plus 9 unused futures inputs).
-
-## Model (`crypto_probe.py`, frozen in `trader.py`)
-
-- **Model:** a LightGBM binary classifier for "next hour up". Settings: 278 trees (early stopping on Oct–Dec 2024,
-  × 1.1), learning rate 0.02, 15 leaves, 2000 minimum rows per leaf, row sampling 0.5, input sampling 0.7, L2
-  penalty 10. One model is shared by all 20 coins.
-- **Retraining:** at the start of every month, on every row before it (with a 25-hour gap before the month).
-- **Validation (2025):** 52.9% of hours right, 56.0% on the most confident 20%, 53.2% on big moves. Monthly
-  retraining over 2026 Jan–Aug: 51.8% of hours right, 55.0% on the most confident 20%.
-
-## Trading rule (`crypto_backtest.py`, `trader.py`)
-
-- **Edge** = P(up) − 0.5. A coin goes **long or short when |edge| ≥ 0.12**, and **stays in while the edge keeps
-  its sign and is at least 0.03** (0.25 × entry); otherwise it's flat.
-- **Allocation, current rule:** capital is split equally among the coins that have a position. Paper trading logs
-  three alternatives side by side: `active_cap2` (at most 50% per coin), `fixed5` (1/5 per position, at most 5
-  open, never re-split) and `slices` (1/20 per coin).
-- **Costs:** every change in a coin's capital weight pays fees (maker 0.02% or taker 0.05% per side, Binance USD-M
-  futures). Positions open at a funding time pay or receive that coin's funding rate.
-- **Accounting:** the decision at hour t uses only candles closed by t + 1h, and earns the move of the next candle.
+All data folders, `checkpoints/` and `external/` are git-ignored.
 
 ## How to run
 
 ```bash
 python serve.py                                             # pages at http://localhost:8000 (no caching)
-python crypto_features.py                                   # build the feature table (cached)
-python leak_check.py 2026-09-10T05:00                       # leak test
-python crypto_probe.py --obj=binary --walk --save=lgbm_plain   # 2025 validation + monthly retraining over 2026
-python crypto_backtest.py --dev=lgbm_plain,lgbm_plain_walk --alloc=active   # development backtest (no holdout)
-python crypto_diagnose.py                                   # sizing and costs, profit by coin and month, neighbouring settings
-python trader.py check                                      # frozen script reproduces the backtest's predictions
-python trader.py replay --from=2026-09-01 --to=2026-09-27 --log=paper_replay_sep   # replay through the live code path
-python trader.py step                                       # one live hourly decision -> runs/paper_log.json
+python crypto_rank.py --universe=20 --delay=1 --walk-from=2021-01-01 --nested-from=2022-01 --save=rank_pit20_d1
+python crypto_rank.py --walk-from=2021-01-01 --nested-from=2022-01 --save=rank20_s5    # today's 20 coins instead
 ```
 
 | Page | Shows |
 |---|---|
-| `direction.html?run=lgbm_plain` | direction accuracy: summary, per coin, by confidence, calibration |
-| `backtest.html?run=bt_final_holdout` | backtest: monthly returns against the 3% goal, equity, threshold grid |
-| `paper.html?run=paper_log` | paper trading: equity per variant, monthly returns, hourly log (demo: `?run=paper_replay_sep`) |
+| `backtest.html?run=rank_pit20_d1` | monthly returns against the goal, gain over time, the setting chosen each month |
 
-Checks passed so far:
-- `trader.py check` reproduces the backtest's September predictions exactly.
-- A September replay through `trader.py` reproduces the backtest's holdout result exactly.
-- A live step that rebuilds features from data cut at the decision time gives identical probabilities.
+## The hourly direction pipeline (earlier, still in the root)
 
-## Before paper trading
-
-- **Live data feed (not done yet).** The archive publishes each day's files the following day, so hourly decisions
-  need the latest 1h and 5m candles from Binance's REST API, with the same columns. After that, schedule
-  `python trader.py step` a few minutes after every full hour.
-- **Rules for the paper test.** Run it frozen: no changes to the model, threshold or features. Judge it after a few
-  months against the 3% goal, per allocation variant, with both fee levels.
+`crypto_features.py`, `crypto_probe.py`, `crypto_backtest.py`, `crypto_nested.py` and `leak_check.py` predict each
+coin's next hour from 46 inputs (candle shape, order flow, the last minutes of the hour). The edge is real but thin
+(52.9% of hours right, Jan 2024 – Aug 2026) and shrinking, and trading it hourly lost 0.7% a month once the
+settings were also chosen out of sample (`backtest.html?run=nested`, `direction.html?run=lgbm_w24`).
 
 ## How we got here (details in `archive/README.md`)
 
 1. **Autoregressive forecasting on sin, trend, amplitude, sunspots and CO₂.** Per-window normalization lets a model
-   extrapolate a trend; a single model's σ is overconfident; an ensemble fixes that; CRPS measures forecast
-   quality.
-2. **One model for many series, and sequential fine-tuning with replay.** Training on many series had trouble
-   learning each one well; sequential fine-tuning worked but forgot earlier series without replay.
-3. **BTC hourly return distribution.** It matched but didn't beat the recent-volatility baseline, and showed no
-   direction edge from price alone.
-4. **Direction models (LightGBM and transformer).** Candle shape, order flow and the last minutes of each hour gave
-   about 53% on 2025 and about 51.8% on 2026. The edge lasts about one hour.
-5. **Market LLM (one step per hour for all coins).** 52.5% on 2025 and 51.1% on 2026. Its distributions beat the
-   volatility baseline slightly, but it lost money when traded hourly.
-6. **Trading.** Hourly flipping loses to fees. Holding a position until the signal fades, with capital
-   concentrated on active signals, is what turned the edge into development profits.
+   extrapolate a trend; an ensemble fixes a single model's overconfidence; CRPS measures forecast quality.
+2. **One model for many series, and sequential fine-tuning with replay.**
+3. **BTC hourly return distribution.** Matched but didn't beat the recent-volatility baseline.
+4. **Next-hour direction (LightGBM and transformers).** About 53% on 2025, 51.8% on 2026; the edge lasts an hour.
+5. **Market LLM.** 52.5% / 51.1%; lost money traded hourly.
+6. **Hourly trading system.** Profitable on development data, −0.04% on the Sept 2026 holdout, and −0.7% a month
+   in the honest month-by-month test.
+7. **Zero-shot Kronos.** A coin flip on the next hour.
+8. **Daily ranking.** Moves over a day are large next to fees, and long-short cancels the market. With today's 20
+   coins it made +4.4% a month, but ZEC and TAO (in the list because they rallied) drove much of it; a coin list
+   rebuilt monthly from past volume, seed averaging, and a fix to the return calculation (weight × simple move,
+   not log move, which had inflated crash days) gave the results above.

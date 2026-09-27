@@ -12,10 +12,15 @@ The findings are summarized in `../SETUP.md` under *How we got here*.
 | `crypto_seq.py`, `crypto_combine.py` | Next-hour direction transformer (about 53% on 2025, 51.8% on 2026), and averaging models |
 | `market_llm.py` | "Market LLM": one step per hour for all 20 coins, Student-t moves (52.5% on 2025, 51.1% on 2026) |
 | `monitor.html`, `crypto.html`, `dummy_train.py` | Monitor pages for the runs above, and a monitor test |
+| `trader.py`, `paper.html` | Frozen hourly trading system (LightGBM, entry 0.12, exit 0.25 × entry) and its paper-trading page. Development months +5.9% / +3.5% a month, Sept 2026 holdout −0.04%, and the honest month-by-month test lost money, so it was retired |
+| `crypto_diagnose.py` | Diagnostics for that system: sizing and costs, profit by coin and month, neighbouring thresholds |
+| `kronos_test.py` | Zero-shot Kronos-small (80-hour context, 10 samples) on next-hour direction: 50.2% hit on Jul 2025 – Aug 2026 (after its weights were uploaded) against 53.3% for LightGBM on the same hours. Needs the repo cloned to `../external/Kronos` |
+| `chronos_test.py` | Same test for Chronos-Bolt; never run (replaced by Kronos) |
+| `data/` | Sunspot and CO₂ series used by `train.py` |
 | `runs/` | Their result files |
 
 **Running an archived script.** Run it from the repository root so that the root modules (`crypto_features.py`,
-`crypto_eval.py`, `monitor.py`) and `data/` are found:
+`crypto_eval.py`, `crypto_backtest.py`, `monitor.py`) and `data/` are found:
 
 ```bash
 PYTHONPATH=. python archive/train.py amp

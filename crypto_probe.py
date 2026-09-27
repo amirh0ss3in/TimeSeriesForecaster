@@ -3,7 +3,8 @@
 Usage: python crypto_probe.py [--target=y1|y24] [--features=a,b,c] [--coins=BTC,ETH] [--obj=binary] [--test]
                               [--seeds=N] [--refit] [--perp] [--wide] [--weight=move] [--walk]
   --weight=move: each training hour counts in proportion to the size of its move (capped at 3 sigma).
-  --walk: refit monthly over 2026; months from HOLDOUT on are predicted and saved but never scored or printed.
+  --walk: refit monthly from --walk-from (default 2026-01-01); months from HOLDOUT on are predicted and saved but
+  never scored or printed.
                               [--save=NAME]   (writes runs/NAME.json for direction.html)
 
 Splits by time with a 25-hour purge between them, so no target overlaps the next split:
@@ -47,7 +48,8 @@ fit = df[df["time"] < ES - purge]
 stop = df[(df["time"] >= ES) & (df["time"] < VAL - purge)]
 val = df[(df["time"] >= VAL) & (df["time"] < TEST - purge)]
 test = df[(df["time"] >= TEST) & (df["time"] < HOLDOUT - purge)]
-walk_rows = df[df["time"] >= TEST]                  # includes the holdout, for saved walk-forward predictions only
+WALK_FROM = pd.Timestamp(arg("walk-from", str(TEST.date())))
+walk_rows = df[df["time"] >= WALK_FROM]             # includes the holdout, for saved walk-forward predictions only
 clip = lambda y: y.clip(-5, 5)                       # heavy tails: fit on clipped targets, score on raw ones
 
 
@@ -128,7 +130,7 @@ if "--walk" in sys.argv and binary:
     # count chosen above, then predict that month. Months from HOLDOUT on are predicted and saved, never scored.
     trees = int(model.best_iteration_ * 1.1)
     parts, monthly = [], []
-    for M in pd.date_range(TEST, df["time"].max(), freq="MS"):
+    for M in pd.date_range(WALK_FROM, df["time"].max(), freq="MS"):
         base = df[(df["time"] < M - purge) & (df[target] != 0)]
         w = None if arg("weight", "") != "move" else base[target].abs().clip(upper=3)
         mdl = lgb.LGBMClassifier(**{**params, "n_estimators": trees}).fit(base[inputs], base[target] > 0, sample_weight=w)
