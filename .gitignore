@@ -1,6 +1,7 @@
-﻿__pycache__/
+__pycache__/
 data/crypto/
-checkpoints/
+checkpoints/*
+!checkpoints/rank_trader/
 data/crypto_5m/
 data/crypto_perp/
 data/crypto_premium/

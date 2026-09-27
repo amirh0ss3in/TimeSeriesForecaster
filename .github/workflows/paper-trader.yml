@@ -1,0 +1,75 @@
+name: paper-trader
+# Daily paper trading of the frozen ranking system (rank_trader.py), at 01:05 UTC: fetch the latest data, decide every
+# day not logged yet, book earlier days. Market data lives in the Actions cache (rebuilt from Binance's archive if the
+# cache is gone); the paper log, the run log and each month's frozen models are committed back to main.
+on:
+  schedule:
+    - cron: "5 1 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/paper-trader.yml"]
+concurrency:
+  group: paper-trader
+permissions:
+  contents: write
+env:
+  BINANCE_SPOT: https://data-api.binance.vision   # api.binance.com and fapi.binance.com refuse GitHub's US servers
+  BINANCE_FUTURES: https://www.binance.com
+  PAPER_FROM: "2026-09-28"
+jobs:
+  paper:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packages
+        run: pip install -q uv && uv pip install --system numpy==2.4.3 pandas==2.3.3 lightgbm==4.7.0
+      - name: Restore market data
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: market-data-${{ github.run_id }}
+          restore-keys: market-data-
+      - name: Trade
+        run: |
+          set -o pipefail
+          {
+            echo "run started $(date -u '+%F %T') UTC (${{ github.event_name }}), cached data: ${{ steps.cache.outputs.cache-matched-key || 'none' }}"
+            if [ -z "${{ steps.cache.outputs.cache-matched-key }}" ]; then
+              echo "== no cached data: building it from Binance's archive"
+              python -u fetch_universe.py | tail -2
+              python -u fetch_universe.py --hourly --from=2026-06 | tail -1
+              echo "== check: this runner reproduces the July 2026 backtest with the frozen models"
+              python -W ignore -u rank_trader.py check
+            fi
+            echo "== update"
+            python -W ignore -u rank_trader.py update
+            if [[ "$(date -u +%F)" < "$PAPER_FROM" ]]; then
+              echo "== the paper test starts on $PAPER_FROM"
+            else
+              echo "== step"
+              python -W ignore -u rank_trader.py step --from=$PAPER_FROM --log=rank_paper
+            fi
+            echo "run finished $(date -u '+%F %T') UTC"
+          } 2>&1 | tee runs/paper_run.log
+      - name: Save market data
+        if: always() && hashFiles('data/universe/BTC.csv.gz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: market-data-${{ github.run_id }}
+      - name: Commit the paper log, the run log and new monthly models
+        if: always()
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add runs/paper_run.log checkpoints/rank_trader
+          if [ -f runs/rank_paper.json ]; then git add runs/rank_paper.json; fi
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -q -m "Paper trading $(date -u +%F)"
+          git pull -q --rebase --autostash && git push -q

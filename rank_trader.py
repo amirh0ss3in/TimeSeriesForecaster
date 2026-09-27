@@ -8,9 +8,10 @@ Usage:
   python rank_trader.py update             latest daily candles, hourly closes and funding rates from Binance's public
                                            API into data/universe*/ (a coin not on disk is added once it is in the top
                                            40 by 24-hour volume)
-  python rank_trader.py step [--now=2026-09-28] [--log=rank_paper]
-                                           the decision for that day (default: today, UTC; run it after 00:00 UTC and
-                                           `update`); books earlier days once their next 01:00 price is known
+  python rank_trader.py step [--now=2026-09-28] [--from=2026-09-28] [--log=rank_paper]
+                                           the decisions for every day not logged yet, up to that day (default: today,
+                                           UTC; run it after `update`); --from = first day of a new log. Books earlier
+                                           days once their next 01:00 price is known
   python rank_trader.py check              replays Jul 2026 through this code and compares it with the backtest
   python rank_trader.py replay --from=2026-09-01 --to=2026-09-26 [--log=rank_replay]
                                            the same code path over past days
@@ -39,7 +40,10 @@ from monitor import write_json
 
 UNIVERSE, H, K, SEEDS, DELAY = 20, 1, 3, 5, 1
 MODEL_DIR = "checkpoints/rank_trader"
-SPOT, FUT = "https://api.binance.com", "https://fapi.binance.com"
+# Public market-data addresses; GitHub's (US) servers are refused by these two, so the workflow points them at
+# data-api.binance.vision and www.binance.com, which serve the same data.
+SPOT = os.environ.get("BINANCE_SPOT", "https://api.binance.com")
+FUT = os.environ.get("BINANCE_FUTURES", "https://fapi.binance.com")
 KLINE_HEADER = ["time", "open", "high", "low", "close", "volume", "quote_volume", "trades", "taker_buy_volume"]
 opt = lambda k, d: next((a.split("=", 1)[1] for a in sys.argv if a.startswith(f"--{k}=")), d)
 
@@ -211,10 +215,13 @@ if __name__ == "__main__":
     elif cmd == "step":
         now = pd.Timestamp(opt("now", str(dt.datetime.now(dt.UTC).date())))
         name = opt("log", "rank_paper")
+        log = open_log(name, pd.Timestamp(opt("from", str(now.date()))))
+        # Every day not logged yet, up to now (catches up missed days; logged days are never recomputed).
+        first = pd.Timestamp(max(log["days"])) + pd.Timedelta(days=1) if log["days"] else pd.Timestamp(log["start"])
+        days = list(pd.date_range(first, now, freq="D"))
         data = load(UNIVERSE, delay=DELAY, end=now)
-        score, w = decide(data, [now])
-        log = open_log(name, now)
-        record(log, score, w)
+        if days:
+            record(log, *decide(data, days))
         booked = book(log, data)
         d = log["days"][str(now.date())]
         print(f"{now.date()}: long {' '.join(c for c, v in d['weights'].items() if v > 0)}   short "

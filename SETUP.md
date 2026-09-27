@@ -78,9 +78,23 @@ python rank_trader.py check      # replays Jul 2026 and compares it with the bac
 python rank_trader.py replay --from=2026-09-01 --to=2026-09-26 --log=rank_replay_sep
 ```
 
-Run `update` and then `step` every day shortly after 01:00 UTC. That's when the 01:00 fill price for the day's
-trades is known, and the previous day can be booked. The log is at `backtest.html?run=rank_paper`: daily positions,
-net per day with maker and taker fees, and gain over time.
+**The paper test runs on GitHub Actions** (`.github/workflows/paper-trader.yml`), starting with the decision for
+2026-09-28:
+- **Schedule:** it runs every day at 01:05 UTC (GitHub may start it a little late).
+- **Data:** it runs `update`, then `step`. `step` decides every day not logged yet, so a missed run is caught up
+  the next day, and days already logged are never recomputed.
+- **Commits:** it commits `runs/rank_paper.json` (the log), `runs/paper_run.log` (the last run's output) and each
+  new month's frozen models to `main`. Run `git pull` before viewing them or changing anything.
+- **Addresses:** GitHub's servers are in the US, where api.binance.com and fapi.binance.com refuse connections. The
+  workflow therefore reads the same data from data-api.binance.vision and www.binance.com (`BINANCE_SPOT`,
+  `BINANCE_FUTURES`).
+- **Cache:** market data is kept in the Actions cache. If the cache is gone (e.g. evicted after 7 days unused), the
+  workflow rebuilds it from Binance's archive and first reruns `check`.
+
+Each decision uses only data from before that day's 00:00 UTC, and the paper fill is the 01:00 close, so the same
+log can also be produced on the laptop (`update`, then `step --from=2026-09-28`). Don't run both, or the two logs
+will diverge. The log is at `backtest.html?run=rank_paper`: daily positions, net per day with maker and taker fees,
+and gain over time.
 
 Checks passed:
 - `check`: the frozen code reproduces the backtest's July 2026 result exactly (−2.59% maker, −3.46% taker).

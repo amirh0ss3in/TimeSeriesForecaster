@@ -6,9 +6,9 @@ among the most traded, delisted ones included, so each month's tradable list can
    have a perpetual (so they can be shorted). Stablecoins, fiat, wrapped and leveraged tokens are left out.
 3. Download their full daily candles (data/universe/<COIN>.csv.gz, same columns as data/crypto/) and funding rates
    (data/universe_funding/<COIN>.csv.gz: time, funding_rate).
-Usage: python fetch_universe.py [--hourly]
-  --hourly: instead, hourly closes (time, close) from Dec 2020 for the coins already in data/universe/, to test trades
-  placed some hours after the daily decision (data/universe_1h/<COIN>.csv.gz).
+Usage: python fetch_universe.py [--hourly [--from=2020-12]]
+  --hourly: instead, hourly closes (time, close) from --from (default Dec 2020) for the coins already in
+  data/universe/, to test trades placed some hours after the daily decision (data/universe_1h/<COIN>.csv.gz).
 """
 import csv
 import datetime as dt
@@ -74,6 +74,7 @@ funding = lambda s, m: f"{ROOT}futures/um/monthly/fundingRate/{s}/{s}-fundingRat
 
 if __name__ == "__main__":
     if "--hourly" in sys.argv:
+        HOURLY_FROM = next((a.split("=")[1] for a in sys.argv if a.startswith("--from=")), "2020-12")
         hourly = lambda s, m: f"{ROOT}spot/monthly/klines/{s}USDT/1h/{s}USDT-1h-{m}.zip"
         os.makedirs("data/universe_1h", exist_ok=True)
         with ThreadPoolExecutor(32) as pool:
@@ -82,7 +83,7 @@ if __name__ == "__main__":
                 if os.path.exists(f"data/universe_1h/{b}.csv.gz"):
                     continue                               # resume after an interruption
                 with gzip.open(p, "rt") as fh:
-                    start = max("2020-12", (list(csv.reader(fh))[1:2] or [["9999"]])[0][0][:7])
+                    start = max(HOURLY_FROM, (list(csv.reader(fh))[1:2] or [["9999"]])[0][0][:7])
                 rows = [[r[0], r[4]] for c in pool.map(lambda m: get(hourly(b, m)), [m for m in months if m >= start])
                         for r in c]
                 with gzip.open(f"data/universe_1h/{b}.csv.gz", "wt", newline="") as fh:
