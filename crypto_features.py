@@ -139,6 +139,7 @@ def build(cutoff=None):
     for c in coins:
         d = pd.DataFrame({k: v[c] for k, v in feats.items()}, index=grid).join(shared)
         d["coin"], d["y1"], d["y24"], d["r1"] = c, y1[c], y24[c], ret[c].shift(-1)
+        d["sig"] = sig[c]                                    # volatility known at t (converts vol units to returns)
         d["gap_next"] = gap[c].shift(-1, fill_value=False)
         rows.append(d[listed[c]].iloc[24 * 7:])              # skip each coin's first week (features warming up)
     df = pd.concat(rows).rename_axis("time").reset_index()

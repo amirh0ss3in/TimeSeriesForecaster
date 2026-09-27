@@ -1,6 +1,8 @@
 """Backtest of hourly direction predictions: does the edge survive trading costs? Goal: > 3% net per month.
 
-Usage: python crypto_backtest.py VAL_PREDS TEST_PREDS [--alloc=slices|active] [--save=NAME]
+Usage: python crypto_backtest.py VAL_PREDS TEST_PREDS [--alloc=slices|active] [--signal=prob|move] [--save=NAME]
+  --signal=move (needs exp_move in the files): trade when the expected move, converted to a return with the coin's
+  current volatility, exceeds a threshold given in round-trip fees; the threshold grid is then in those units.
   VAL_PREDS / TEST_PREDS name checkpoints/preds_<NAME>.npz files (P(up) per coin-hour, saved by the model scripts).
 
 Rules, fixed before looking at results:
@@ -29,10 +31,14 @@ THRESHOLDS = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12, 0.15]
 def load(name):
     d = np.load(f"checkpoints/preds_{name}.npz", allow_pickle=True)
     p = pd.DataFrame({"coin": d["coin"], "time": pd.to_datetime(d["time"]), "prob": d["prob"]})
-    return p.merge(features()[["coin", "time", "r1"]], on=["coin", "time"])
+    if "exp_move" in d:
+        p["exp_move"] = d["exp_move"]
+    return p.merge(features()[["coin", "time", "r1", "sig"]], on=["coin", "time"])
 
 
-def run(p, thr, fee, boot=300, seed=0, alloc="slices"):
+def run(p, thr, fee, boot=300, seed=0, alloc="slices", signal="prob"):
+    if signal == "move":                     # edge measured in round-trip fees: expected return / (2 x fee)
+        p = p.assign(prob=0.5 + p["exp_move"] * p["sig"] / (2 * fee))
     prob = p.pivot(index="time", columns="coin", values="prob")
     r1 = p.pivot(index="time", columns="coin", values="r1").reindex_like(prob)
     grid = pd.date_range(prob.index.min(), prob.index.max(), freq="h")
@@ -73,11 +79,14 @@ if __name__ == "__main__":
     names = [a for a in sys.argv[1:] if not a.startswith("--")]
     save = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--save=")), "")
     alloc = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--alloc=")), "slices")
+    signal = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--signal=")), "prob")
+    if signal == "move":
+        THRESHOLDS[:] = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]    # expected move of at least k round-trip fees
     val, test = load(names[0]), load(names[1])
     print(f"validation: {names[0]} ({val['time'].min():%Y-%m} .. {val['time'].max():%Y-%m}), "
           f"test: {names[1]} ({test['time'].min():%Y-%m} .. {test['time'].max():%Y-%m})")
     print("\n-- threshold grid on VALIDATION (maker fees) --")
-    grid = [run(val, t, FEES["maker 0.02%"], boot=100, alloc=alloc) for t in THRESHOLDS]
+    grid = [run(val, t, FEES["maker 0.02%"], boot=100, alloc=alloc, signal=signal) for t in THRESHOLDS]
     for r in grid:
         show("val", r)
     best = max(grid, key=lambda r: r["monthly_mean"])
@@ -85,11 +94,11 @@ if __name__ == "__main__":
     out = {}
     for fname, fee in FEES.items():
         for split, p in (("val", val), ("test", test)):
-            out[f"{split} {fname}"] = r = run(p, best["threshold"], fee, alloc=alloc)
+            out[f"{split} {fname}"] = r = run(p, best["threshold"], fee, alloc=alloc, signal=signal)
             show(f"{split.upper()} {fname}", r)
     print("\nTEST monthly (maker):", "  ".join(f"{k} {v:+.2%}" for k, v in out["test maker 0.02%"]["monthly"].items()))
     if save:
-        write_json(f"runs/{save}.json", {"name": save, "val_preds": names[0], "test_preds": names[1], "alloc": alloc,
+        write_json(f"runs/{save}.json", {"name": save, "val_preds": names[0], "test_preds": names[1], "alloc": alloc, "signal": signal,
                                          "threshold": best["threshold"], "grid": [{k: r[k] for k in (
                                              "threshold", "monthly_mean", "trades_per_day", "hit_on_trades",
                                              "net_per_trade")} for r in grid], "results": out, "goal_monthly": 0.03})
