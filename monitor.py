@@ -77,13 +77,17 @@ class Monitor:
         self._write()
 
     def _write(self):
-        # Write to a temp file, then swap it in, so the page never reads a half-written file.
-        tmp = self.path + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump(self.data, fh)
-        for _ in range(50):  # on Windows the swap fails while the server is reading the file
-            try:
-                os.replace(tmp, self.path)
-                return
-            except PermissionError:
-                time.sleep(0.02)
+        write_json(self.path, self.data)
+
+
+def write_json(path, data):
+    """Write to a temp file, then swap it in, so the page never reads a half-written file."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    for _ in range(50):  # on Windows the swap fails while the server is reading the file
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.02)

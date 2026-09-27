@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crypto Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<style>
+  html, body { overflow-x: hidden; }
+  body { font-family: system-ui, sans-serif; margin: 16px; background: #fafafa; color: #222; }
+  #status { font-size: 14px; margin-bottom: 8px; }
+  b { font-variant-numeric: tabular-nums; }
+  .live { color: #1a7f37; } .done { color: #555; } .err { color: #c00; }
+  #controls { display: flex; gap: 10px; align-items: center; margin: 8px 0 12px; }
+  #slider { flex: 1; }
+  .grid { display: grid; gap: 12px; margin-bottom: 12px; }
+  .two { grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); }
+  .fans { grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px 10px 4px; min-width: 0; }
+  .card h3 { margin: 0 0 2px; font-size: 15px; }
+  .note { font-size: 12px; color: #666; margin-bottom: 4px; }
+  table { border-collapse: collapse; font-size: 13px; width: 100%; margin: 4px 0 8px; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  .win { color: #1a7f37; font-weight: 600; } .lose { color: #b2182b; }
+  #config { font: 12px monospace; color: #555; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="status">Loading…</div>
+<div id="controls">
+  <button id="play">▶ Replay</button>
+  <input id="slider" type="range" min="0" max="0" value="0">
+  <span id="stepLabel"></span>
+</div>
+
+<div class="grid two">
+  <div class="card"><h3>Validation skill during training (2025)</h3>
+    <div class="note">model CRPS ÷ recent-volatility baseline CRPS · below 1 = the model beats the baseline</div>
+    <div id="skill" style="height:280px"></div></div>
+  <div class="card"><h3>Summary at this snapshot</h3>
+    <div class="note">validation 2025, one forecast from every 3rd midnight · CRPS in % return · lower is better</div>
+    <div id="summary"></div>
+    <div id="test"></div></div>
+</div>
+
+<div class="card" style="margin-bottom:12px"><h3>Example days: 72 hours of price, then the 24-hour forecast</h3>
+  <div class="note">shaded: 95% and 50% of sampled paths · red: median · thin: 3 sampled paths · dotted: what actually happened</div>
+  <div id="fans" class="grid fans" style="margin:0"></div></div>
+
+<div class="grid two">
+  <div class="card"><h3>CRPS by forecast hour</h3>
+    <div class="note">error of each hour's return, 1 to 24 hours ahead</div>
+    <div id="byHour" style="height:260px"></div></div>
+  <div class="card"><h3>Band coverage of the 24-hour move</h3>
+    <div class="note">share of days the actual move fell inside the band · dashed = what a calibrated forecast hits</div>
+    <div id="cover" style="height:260px"></div></div>
+</div>
+<div id="config"></div>
+
+<script>
+const run = new URLSearchParams(location.search).get("run") || "crypto_BTC";
+const slider = document.getElementById("slider"), playBtn = document.getElementById("play");
+let data = null, idx = 0, follow = true, timer = null, built = false;
+const cfg = { responsive: true, displaylogo: false };
+const f3 = v => v == null ? "—" : v.toFixed(3), pc = v => v == null ? "—" : `${Math.round(100 * v)}%`;
+
+async function poll() {
+  try {
+    const r = await fetch(`runs/${run}.json?t=${Date.now()}`);
+    if (!r.ok) throw new Error(`runs/${run}.json not found (HTTP ${r.status})`);
+    const d = await r.json();
+    const changed = !data || d.snapshots.length !== data.snapshots.length || d.done !== data.done;
+    if (data && d.snapshots.length < data.snapshots.length) follow = true;
+    data = d;
+    if (changed) {
+      slider.max = Math.max(0, data.snapshots.length - 1);
+      if (follow) idx = +slider.max;
+      slider.value = idx;
+      draw();
+    }
+  } catch (e) { document.getElementById("status").innerHTML = `<span class="err">${e.message}</span>`; }
+  setTimeout(poll, 1000);
+}
+
+function table(rows, ref) {
+  // rows: [[label, metrics]]; skill columns are relative to `ref` (the volatility baseline)
+  const cell = (v, r) => r == null ? f3(v) : `${f3(v)} <span class="${v < r ? "win" : "lose"}">(${(v / r).toFixed(2)})</span>`;
+  return `<table><tr><th></th><th>1h CRPS</th><th>24h CRPS</th><th>in 50%</th><th>in 95%</th><th>direction</th></tr>` +
+    rows.map(([k, m], i) => `<tr><td>${k}</td><td>${cell(m.crps_h[0], i ? null : ref.crps_h[0])}</td>
+      <td>${cell(m.crps_24, i ? null : ref.crps_24)}</td><td>${pc(m.cover50)}</td><td>${pc(m.cover95)}</td>
+      <td>${m.direction == null ? "—" : pc(m.direction)}</td></tr>`).join("") + `</table>`;
+}
+
+function draw() {
+  const snaps = data.snapshots, s = snaps[idx], base = data.baselines.val;
+  const vol = base.volatility, clim = base.climatology;
+  const state = data.done ? '<span class="done">■ finished</span>' : '<span class="live">● live</span>';
+  document.getElementById("status").innerHTML = s
+    ? `<b>${data.name}</b> ${state} · snapshot ${idx + 1}/${snaps.length} · step <b>${s.step}</b> · train NLL <b>${s.train_nll == null ? "—" : s.train_nll.toFixed(3)}</b>`
+    : `<b>${data.name}</b> ${state} · waiting for the first evaluation…`;
+  document.getElementById("stepLabel").textContent = s ? `step ${s.step}` : "";
+  document.getElementById("config").textContent = JSON.stringify(data.config);
+  if (!s) return;
+
+  // Skill over training (all snapshots up to the selected one).
+  const up = snaps.slice(0, idx + 1), steps = up.map(q => q.step);
+  const allSteps = snaps.map(q => q.step);
+  Plotly.react("skill", [
+    { x: steps, y: up.map(q => q.val.crps_h[0] / vol.crps_h[0]), name: "next hour", line: { color: "#1f77b4" } },
+    { x: steps, y: up.map(q => q.val.crps_24 / vol.crps_24), name: "next 24 hours", line: { color: "#d62728" } },
+    { x: [allSteps[0], allSteps[allSteps.length - 1]], y: [clim.crps_24 / vol.crps_24, clim.crps_24 / vol.crps_24],
+      name: "climatology (24h)", line: { color: "#999", dash: "dot" }, mode: "lines" },
+  ], { margin: { t: 8, r: 8, b: 36, l: 44 }, xaxis: { title: { text: "step", standoff: 4 } },
+       legend: { orientation: "h", y: -0.25 },
+       shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 1, y1: 1, line: { color: "#555", dash: "dash", width: 1 } }],
+  }, cfg);
+
+  document.getElementById("summary").innerHTML = table([["model", s.val], ["recent volatility", vol], ["climatology", clim]], vol) +
+    `<div class="note">(×) = model ÷ recent-volatility baseline · direction = share of days the median got the sign of the 24-hour move right</div>`;
+  const t = data.test, v = data.val_full, rows = m => [["model", m.model], ["recent volatility", m.volatility], ["climatology", m.climatology]];
+  document.getElementById("test").innerHTML = t
+    ? `<h3>Final model, all of 2025 (validation, every day)</h3>` + table(rows(v), v.volatility) +
+      `<h3>Test, Jan–Aug 2026 (evaluated once, after training)</h3>` + table(rows(t), t.volatility)
+    : `<div class="note">Final validation (every day of 2025) and test (Jan–Aug 2026) results appear here when training finishes.</div>`;
+
+  // Example days: price fans.
+  if (!built) {
+    document.getElementById("fans").innerHTML = data.show.map((e, i) =>
+      `<div><div class="note"><b>${e.origin}</b> UTC</div><div id="fan-${i}" style="height:220px"></div></div>`).join("");
+    built = true;
+  }
+  const hx = Array.from({ length: 73 }, (_, i) => i - 72), fx = Array.from({ length: 25 }, (_, i) => i);
+  data.show.forEach((e, i) => {
+    const f = s.fans[i], q = f.q;
+    const band = (lo, hi, color, name) => [
+      { x: fx, y: hi, line: { width: 0 }, showlegend: false, hoverinfo: "skip" },
+      { x: fx, y: lo, line: { width: 0 }, fill: "tonexty", fillcolor: color, name, hoverinfo: "skip", showlegend: false }];
+    Plotly.react(`fan-${i}`, [
+      ...band(q[0], q[4], "rgba(214,39,40,0.12)", "95%"), ...band(q[1], q[3], "rgba(214,39,40,0.25)", "50%"),
+      ...f.samples.map(p => ({ x: fx, y: p, line: { color: "rgba(214,39,40,0.4)", width: 1 }, hoverinfo: "skip", showlegend: false })),
+      { x: hx, y: e.hist, line: { color: "#666", width: 1.3 }, name: "price", showlegend: false },
+      { x: fx, y: e.truth, line: { color: "#222", width: 1.5, dash: "dot" }, name: "actual", showlegend: false },
+      { x: fx, y: q[2], line: { color: "#d62728", width: 2 }, name: "median", showlegend: false },
+    ], { margin: { t: 4, r: 6, b: 28, l: 56 }, xaxis: { title: { text: "hours from midnight", standoff: 2 }, range: [-72, 24] },
+         shapes: [{ type: "line", x0: 0, x1: 0, yref: "paper", y0: 0, y1: 1, line: { color: "#aaa", width: 1 } }],
+    }, { ...cfg, displayModeBar: false });
+  });
+
+  // CRPS by forecast hour and band coverage.
+  const hrs = Array.from({ length: vol.crps_h.length }, (_, i) => i + 1);
+  Plotly.react("byHour", [
+    { x: hrs, y: s.val.crps_h, name: "model", line: { color: "#d62728", width: 2 } },
+    { x: hrs, y: vol.crps_h, name: "recent volatility", line: { color: "#1f77b4" } },
+    { x: hrs, y: clim.crps_h, name: "climatology", line: { color: "#999", dash: "dot" } },
+  ], { margin: { t: 8, r: 8, b: 36, l: 44 }, xaxis: { title: { text: "hours ahead", standoff: 4 } },
+       legend: { orientation: "h", y: -0.3 } }, cfg);
+  const names = ["model", "recent volatility", "climatology"], ms = [s.val, vol, clim], cols = ["#d62728", "#1f77b4", "#999"];
+  Plotly.react("cover", names.map((n, i) => ({ type: "bar", name: n, x: ["50% band", "95% band"],
+    y: [ms[i].cover50, ms[i].cover95], marker: { color: cols[i] } })), {
+    margin: { t: 8, r: 8, b: 36, l: 44 }, yaxis: { range: [0, 1], tickformat: ".0%" }, barmode: "group",
+    legend: { orientation: "h", y: -0.2 },
+    shapes: [0.5, 0.95].map((v, i) => ({ type: "line", x0: i - 0.45, x1: i + 0.45, y0: v, y1: v,
+                                          line: { color: "#222", dash: "dash", width: 1.5 } })),
+  }, cfg);
+}
+
+slider.oninput = () => { idx = +slider.value; follow = idx === +slider.max; draw(); };
+playBtn.onclick = () => {
+  if (timer) { clearInterval(timer); timer = null; playBtn.textContent = "▶ Replay"; return; }
+  if (!data || !data.snapshots.length) return;
+  follow = false; idx = 0; playBtn.textContent = "⏸ Pause";
+  timer = setInterval(() => {
+    idx = Math.min(idx + 1, +slider.max); slider.value = idx; draw();
+    if (idx === +slider.max) { clearInterval(timer); timer = null; follow = true; playBtn.textContent = "▶ Replay"; }
+  }, 400);
+};
+poll();
+</script>
+</body>
+</html>
