@@ -116,3 +116,36 @@ if arg("save", ""):
         "val": {"pooled": pooled, "per_coin": per_coin}, "rules": rules, "test": test_stats,
         "importance": {k: float(v) for k, v in (imp / imp.sum()).head(15).items()}})
     print(f"saved runs/{name}.json  ->  http://localhost:8000/direction.html?run={name}")
+
+if "--walk" in sys.argv and binary:
+    # Walk-forward test: at the start of each 2026 month, refit on everything before it (25-hour purge) with the tree
+    # count chosen above, then predict that month. The model trained once is scored month by month alongside it.
+    trees = int(model.best_iteration_ * 1.1)
+    static_p = model.predict(test[inputs])
+    parts, monthly = [], []
+    for M in pd.date_range(TEST, df["time"].max(), freq="MS"):
+        base = df[(df["time"] < M - purge) & (df[target] != 0)]
+        mdl = lgb.LGBMClassifier(**{**params, "n_estimators": trees}).fit(base[inputs], base[target] > 0)
+        mm = ((test["time"] >= M) & (test["time"] < M + pd.offsets.MonthBegin(1))).to_numpy()
+        pw = mdl.predict_proba(test.loc[mm, inputs])[:, 1] - 0.5
+        sw = direction_stats(test["time"].to_numpy()[mm], test[target].to_numpy()[mm], pw, boot=100)
+        ss = direction_stats(test["time"].to_numpy()[mm], test[target].to_numpy()[mm], static_p[mm], boot=100)
+        monthly.append({"month": str(M)[:7], "hit": sw["hit"], "top20": sw["top20"], "n": sw["n"],
+                        "static_hit": ss["hit"], "static_top20": ss["top20"]})
+        parts.append(pd.DataFrame({"i": np.flatnonzero(mm), "p": pw}))
+        print(f"{str(M)[:7]}  retrained {sw['hit'][0]:.2%} (top20 {sw['top20'][0]:.2%})   "
+              f"trained once {ss['hit'][0]:.2%} (top20 {ss['top20'][0]:.2%})", flush=True)
+    wp = pd.concat(parts).sort_values("i")
+    tw = test.iloc[wp["i"].to_numpy()]
+    walk = score(tw, wp["p"].to_numpy(), "WALK-FORWARD TEST 2026, lightgbm", prob=wp["p"].to_numpy() + 0.5)
+    walk_coins = {c: direction_stats(g["time"].to_numpy(), g[target].to_numpy(), wp["p"].to_numpy()[(tw["coin"] == c).to_numpy()],
+                                     boot=200) for c, g in tw.groupby("coin")}
+    if arg("save", ""):
+        wname = arg("save", "") + "_walk"
+        once = direction_stats(test["time"].to_numpy(), test[target].to_numpy(), static_p)
+        write_json(f"runs/{wname}.json", {"name": wname, "kind": "lightgbm refit monthly (walk-forward)",
+                                          "title": "Test Jan–Aug 2026, refit at the start of every month", "done": True,
+                                          "snapshots": [], "config": {"trees": trees, "inputs": inputs},
+                                          "reference": {"same model, trained once through 2024": once},
+                                          "val": {"pooled": walk, "per_coin": walk_coins}, "monthly": monthly})
+        print(f"saved runs/{wname}.json  ->  http://localhost:8000/direction.html?run={wname}")

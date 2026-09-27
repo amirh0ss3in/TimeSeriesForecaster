@@ -122,6 +122,60 @@ def logloss(idx, prob):
     return float(-(yy * np.log(pp) + (~yy) * np.log(1 - pp)).mean())
 
 
+def train_steps(starts, n_steps):
+    """Train the current `model` from scratch-initialized weights on the given window starts (no evaluation)."""
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, n_steps)
+    for _ in range(n_steps):
+        rows = starts[torch.randint(0, len(starts), (n_models, batch), device=dev)][..., None] + span
+        v = Vg[rows].float()
+        loss = (F.binary_cross_entropy_with_logits(model(Xg[rows])[..., 0], Lg[rows], reduction="none") * v).sum() / v.sum()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        sched.step()
+
+
+if "--walk" in sys.argv:
+    # Walk-forward test: at the start of each 2026 month, retrain from scratch on everything before it (25-hour purge),
+    # then predict that month. Same fixed recipe every month; each month's model only ever sees the past.
+    cc = df["coin"].to_numpy()
+    months = pd.date_range(TEST, df["time"].max(), freq="MS")
+    idx_all, prob_all, monthly, t0 = [], [], [], time.time()
+    for M in months:
+        cut = np.datetime64(M - purge)
+        starts = torch.tensor(np.concatenate([np.arange(a, a + int(np.searchsorted(t[a:b], cut)) - ctx + 1)
+                                              for a, b in zip(seg[:-1], seg[1:])]), device=dev)
+        torch.manual_seed(0)
+        model = Ensemble(n_models, ctx, d_model, heads, layers, window_norm=False, n_in=X.shape[1], n_out=1,
+                         dropout=dropout).to(dev)
+        train_steps(starts, steps)
+        ranges = split_rows(M, M + pd.offsets.MonthBegin(1))
+        idx = np.concatenate([np.arange(p, q) for p, q in ranges])
+        p = predict(ranges)[idx]
+        ms = direction_stats(t[idx], y[idx], p - 0.5, boot=100)
+        monthly.append({"month": str(M)[:7], "hit": ms["hit"], "top20": ms["top20"], "n": ms["n"]})
+        idx_all.append(idx)
+        prob_all.append(p)
+        print(f"{str(M)[:7]}  trained on {len(starts)} windows  " + line("", ms)[34:] + f"  ({time.time() - t0:.0f}s)",
+              flush=True)
+    idx, prob = np.concatenate(idx_all), np.concatenate(prob_all)
+    pooled = direction_stats(t[idx], y[idx], prob - 0.5, prob=prob)
+    per_coin = {c: direction_stats(t[idx][cc[idx] == c], y[idx][cc[idx] == c], prob[cc[idx] == c] - 0.5,
+                                   prob=prob[cc[idx] == c], boot=200) for c in sorted(set(cc[idx]))}
+    print(line("\nWALK-FORWARD TEST 2026, pooled", pooled))
+    for c, s in per_coin.items():
+        print(line(f"  {c}", s))
+    static = "runs/direction_final.json"
+    ref = {"same model, trained once through 2024": __import__("json").load(open(static))["test"]} if os.path.exists(static) else {}
+    write_json(f"runs/{name}.json", {"name": name, "kind": "transformer retrained monthly (walk-forward)",
+                                     "title": "Test Jan–Aug 2026, retrained at the start of every month",
+                                     "done": True, "snapshots": [], "config": {"steps_per_month": steps, "ctx": ctx,
+                                     "lr": lr, "dropout": dropout, "weight_decay": wd}, "reference": ref,
+                                     "val": {"pooled": pooled, "per_coin": per_coin}, "monthly": monthly})
+    np.savez(f"checkpoints/preds_{name}.npz", coin=cc[idx], time=t[idx], prob=prob)
+    sys.exit()
+
 # ---- train ----
 cfg = dict(coins=coins or "all 20", ctx=ctx, d_model=d_model, heads=heads, layers=layers, n_models=n_models,
            batch=batch, lr=lr, select=select, dropout=dropout, weight_decay=wd, steps=steps, inputs=num + ["hour sin/cos", "weekday sin/cos"],

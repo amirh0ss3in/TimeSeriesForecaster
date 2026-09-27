@@ -34,10 +34,15 @@
     <div id="hit" style="height:260px"></div></div>
 </div>
 
-<div class="card" style="margin-bottom:12px"><h3>Validation 2025: next-hour direction</h3>
+<div class="card" style="margin-bottom:12px"><h3 id="sumTitle">Validation 2025: next-hour direction</h3>
   <div class="note">[95% range from resampling whole days] · green = range entirely above 50% · top 20% = the model's
     most confident fifth · big moves = moves over half a typical hour (quote bounce can't decide them)</div>
   <div id="summary"></div></div>
+
+<div class="card" id="monthCard" style="margin-bottom:12px; display:none"><h3>By month</h3>
+  <div class="note">share of next-hour directions called right in each month · solid = retrained every month, dashed =
+    the same model trained once through 2024 (where available)</div>
+  <div id="months" style="height:280px"></div></div>
 
 <div class="grid">
   <div class="card"><h3>Per coin</h3>
@@ -104,9 +109,27 @@ function draw() {
     }, cfg);
   }
 
+  document.getElementById("sumTitle").textContent = data.title || "Validation 2025: next-hour direction";
+  const mo = data.monthly;
+  document.getElementById("monthCard").style.display = mo ? "" : "none";
+  if (mo) {
+    const x = mo.map(m => m.month), tr = [
+      { x, y: mo.map(m => m.hit[0]), name: "retrained: all hours", line: { color: "#d62728" },
+        error_y: { type: "data", symmetric: false, array: mo.map(m => m.hit[2] - m.hit[0]),
+                   arrayminus: mo.map(m => m.hit[0] - m.hit[1]), color: "#d62728", thickness: 1 } },
+      { x, y: mo.map(m => m.top20[0]), name: "retrained: most confident 20%", line: { color: "#2ca02c" } }];
+    if (mo[0].static_hit) tr.push(
+      { x, y: mo.map(m => m.static_hit[0]), name: "trained once: all hours", line: { color: "#d62728", dash: "dash" } },
+      { x, y: mo.map(m => m.static_top20[0]), name: "trained once: top 20%", line: { color: "#2ca02c", dash: "dash" } });
+    Plotly.react("months", tr, { margin: { t: 8, r: 8, b: 40, l: 50 }, yaxis: { tickformat: ".0%" },
+      legend: { orientation: "h", y: -0.2 },
+      shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0.5, y1: 0.5, line: { color: "#555", dash: "dash", width: 1 } }],
+    }, cfg);
+  }
+
   // Summary table: this model, reference models, simple rules.
   const rows = [];
-  if (data.val) rows.push(["<b>this model</b> (final)", data.val.pooled]);
+  if (data.val) rows.push([data.monthly ? "<b>retrained monthly</b>" : "<b>this model</b> (final)", data.val.pooled]);
   else if (last) rows.push(["this model (latest snapshot)", last.val]);
   if (data.test) rows.push(["<b>this model, TEST Jan–Aug 2026</b>", data.test]);
   Object.entries(data.reference || {}).forEach(([k, v]) => rows.push([`reference: ${k}`, v]));
