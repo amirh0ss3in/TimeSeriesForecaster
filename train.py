@@ -1,6 +1,8 @@
 """Ensemble of decoder-only transformers, next-value prediction, forecast of an unseen range by sampling (like an LLM).
 
-Usage: python train.py <signal> [--raw] [--noise=STD]
+Usage: python train.py <signal> [--raw] [--noise=STD] [--half-life=H]
+  --half-life: recency weighting — training windows are drawn with probability 0.5 ** (age / H), where age is how far
+  the window's last value lies before the end of the training data (same expected gradient as weighting the loss).
   signal: sin | trend | amp (synthetic) or sunspots | co2 (real, see DATASETS);  --raw turns off per-window
   normalization;  --noise adds Gaussian observation noise to both training and test data of a synthetic signal
   (fixed seed). The forecast is scored against the noisy test values.
@@ -38,8 +40,11 @@ args = [a for a in sys.argv[1:] if not a.startswith("--")]
 signal_name = args[0] if args else "sin"
 real = signal_name in DATASETS
 window_norm = "--raw" not in sys.argv
-noise = float(next((a.split("=")[1] for a in sys.argv if a.startswith("--noise=")), 0))  # observation noise std
-name = signal_name + (f"_noise{noise:g}" if noise else "") + ("" if window_norm else "_raw")
+flag = lambda key: float(next((a.split("=")[1] for a in sys.argv if a.startswith(f"--{key}=")), 0))
+noise = flag("noise")          # observation noise std
+half_life = flag("half-life")  # recency weighting, in x units (years for real data); 0 = off
+name = (signal_name + (f"_noise{noise:g}" if noise else "") + (f"_hl{half_life:g}" if half_life else "")
+        + ("" if window_norm else "_raw"))
 n, m = 24, 40          # synthetic: train on [0, nπ), test on [nπ, (n+m)π]
 pts_per_pi = 20        # synthetic sampling: h = π/20, so one period = 40 points
 ctx, batch = 40, 128   # synthetic: context = one period; random training windows per model per step
@@ -81,6 +86,12 @@ z_train = torch.tensor((y_train - mu) / sd, dtype=torch.float32, device=dev)
 # All windows of ctx+1 consecutive training values: input = first ctx, target = the next value at each position.
 win = z_train.unfold(0, ctx + 1, 1)                  # (num_windows, ctx+1)
 X, Y = win[:, :-1], win[:, 1:]
+
+# Sampling probability of each window: uniform, or exponentially decaying with the age of its last value.
+age = x_train[-1] - x_train[ctx:]                    # window i ends at x_train[i + ctx]
+p_win = torch.tensor(0.5 ** (age / half_life) if half_life else np.ones(len(age)), dtype=torch.float32, device=dev)
+p_win /= p_win.sum()
+eff_windows = 1 / (p_win ** 2).sum().item()          # effective number of windows (= all of them when uniform)
 
 
 # ---- model ----
@@ -170,13 +181,13 @@ def forecast():
 cfg = dict(signal=signal_name, x_unit="year" if real else "pi", noise=noise, window_norm=window_norm,
            **(dict(split_year=split_year) if real else dict(n=n, m=m, pts_per_pi=pts_per_pi)), ctx=ctx,
            d_model=d_model, heads=heads, layers=layers, steps=steps, lr=lr, n_models=n_models, n_paths=n_paths,
-           batch=batch, train_windows=len(X), params_per_model=sum(p.numel() for p in model.parameters()) // n_models)
+           batch=batch, half_life=half_life, train_windows=len(X), effective_windows=round(eff_windows), params_per_model=sum(p.numel() for p in model.parameters()) // n_models)
 print(cfg)
 mon = Monitor(name, x_train, y_train, x_test, y_test, config=cfg)
 mse_idx = torch.randperm(len(X), device=dev)[:256]   # fixed windows for the monitor's one-step MSE
 t0 = time.time()
 for step in range(steps + 1):
-    idx = torch.randint(0, len(X), (n_models, batch), device=dev)   # a different random batch for each model
+    idx = torch.multinomial(p_win, n_models * batch, replacement=True).view(n_models, batch)  # own batch per model
     mean, log_sigma = model(X[idx])
     loss = nll(mean, log_sigma, Y[idx])
     if step % log_every == 0 or step == steps:
