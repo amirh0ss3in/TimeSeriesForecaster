@@ -72,61 +72,62 @@ def get(url):
 kline = lambda s, m: f"{ROOT}spot/monthly/klines/{s}USDT/1d/{s}USDT-1d-{m}.zip"
 funding = lambda s, m: f"{ROOT}futures/um/monthly/fundingRate/{s}/{s}-fundingRate-{m}.zip"
 
-if "--hourly" in sys.argv:
-    hourly = lambda s, m: f"{ROOT}spot/monthly/klines/{s}USDT/1h/{s}USDT-1h-{m}.zip"
-    os.makedirs("data/universe_1h", exist_ok=True)
+if __name__ == "__main__":
+    if "--hourly" in sys.argv:
+        hourly = lambda s, m: f"{ROOT}spot/monthly/klines/{s}USDT/1h/{s}USDT-1h-{m}.zip"
+        os.makedirs("data/universe_1h", exist_ok=True)
+        with ThreadPoolExecutor(32) as pool:
+            for p in sorted(glob.glob("data/universe/*.csv.gz")):
+                b = os.path.basename(p)[:-7]
+                if os.path.exists(f"data/universe_1h/{b}.csv.gz"):
+                    continue                               # resume after an interruption
+                with gzip.open(p, "rt") as fh:
+                    start = max("2020-12", (list(csv.reader(fh))[1:2] or [["9999"]])[0][0][:7])
+                rows = [[r[0], r[4]] for c in pool.map(lambda m: get(hourly(b, m)), [m for m in months if m >= start])
+                        for r in c]
+                with gzip.open(f"data/universe_1h/{b}.csv.gz", "wt", newline="") as fh:
+                    w = csv.writer(fh)
+                    w.writerow(["time", "close"])
+                    w.writerows(rows)
+                print(f"{b:10s} {len(rows):6d} hours", flush=True)
+        sys.exit()
+
+    # 1. Every USDT coin and its perpetual (small-price coins trade per 1000 or per million units on futures).
+    spot = [s[:-4] for s in listing("data/spot/monthly/klines/") if s.endswith("USDT")]
+    perps = set(listing("data/futures/um/monthly/fundingRate/"))
+    lev = {b for b in spot for suf in ("UP", "DOWN", "BULL", "BEAR") if b.endswith(suf) and b[:-len(suf)] in spot}
+    coins = [b for b in spot if b.isascii() and b.isalnum() and b not in NOT_COINS and b not in lev]
+    perp = {b: next((p + b + "USDT" for p in ("", "1000", "1000000", "1M") if p + b + "USDT" in perps), None) for b in coins}
+    coins = [b for b in coins if perp[b]]
+    print(f"{len(spot)} USDT spot coins, {len(coins)} with a perpetual (after leaving out stablecoins and tokens)", flush=True)
+
+    # 2. Quarterly volume snapshots -> coins that were ever in the top 40.
+    snaps = [m for m in months if int(m[5:]) in (1, 4, 7, 10)]
     with ThreadPoolExecutor(32) as pool:
-        for p in sorted(glob.glob("data/universe/*.csv.gz")):
-            b = os.path.basename(p)[:-7]
-            if os.path.exists(f"data/universe_1h/{b}.csv.gz"):
-                continue                               # resume after an interruption
-            with gzip.open(p, "rt") as fh:
-                start = max("2020-12", (list(csv.reader(fh))[1:2] or [["9999"]])[0][0][:7])
-            rows = [[r[0], r[4]] for c in pool.map(lambda m: get(hourly(b, m)), [m for m in months if m >= start])
-                    for r in c]
-            with gzip.open(f"data/universe_1h/{b}.csv.gz", "wt", newline="") as fh:
+        vol = dict(zip([(b, m) for b in coins for m in snaps],
+                       pool.map(lambda bm: sum(float(r[7]) for r in get(kline(*bm))), [(b, m) for b in coins for m in snaps])))
+    keep = set()
+    for m in snaps:
+        keep |= set(sorted(coins, key=lambda b: -vol[(b, m)])[:TOP])
+    keep = sorted(keep)
+    print(f"{len(keep)} coins were in the top {TOP} by USDT volume at some quarterly snapshot:", " ".join(keep), flush=True)
+
+    # 3. Full daily candles and funding rates.
+    os.makedirs("data/universe", exist_ok=True)
+    os.makedirs("data/universe_funding", exist_ok=True)
+    with ThreadPoolExecutor(32) as pool:
+        for b in keep:
+            if os.path.exists(f"data/universe_funding/{b}.csv.gz"):
+                continue                                   # resume after an interruption
+            rows = [r[:6] + r[7:10] for c in pool.map(lambda m: get(kline(b, m)), months) for r in c]
+            with gzip.open(f"data/universe/{b}.csv.gz", "wt", newline="") as fh:
                 w = csv.writer(fh)
-                w.writerow(["time", "close"])
+                w.writerow(["time", "open", "high", "low", "close", "volume", "quote_volume", "trades", "taker_buy_volume"])
                 w.writerows(rows)
-            print(f"{b:10s} {len(rows):6d} hours", flush=True)
-    sys.exit()
-
-# 1. Every USDT coin and its perpetual (small-price coins trade per 1000 or per million units on futures).
-spot = [s[:-4] for s in listing("data/spot/monthly/klines/") if s.endswith("USDT")]
-perps = set(listing("data/futures/um/monthly/fundingRate/"))
-lev = {b for b in spot for suf in ("UP", "DOWN", "BULL", "BEAR") if b.endswith(suf) and b[:-len(suf)] in spot}
-coins = [b for b in spot if b.isascii() and b.isalnum() and b not in NOT_COINS and b not in lev]
-perp = {b: next((p + b + "USDT" for p in ("", "1000", "1000000", "1M") if p + b + "USDT" in perps), None) for b in coins}
-coins = [b for b in coins if perp[b]]
-print(f"{len(spot)} USDT spot coins, {len(coins)} with a perpetual (after leaving out stablecoins and tokens)", flush=True)
-
-# 2. Quarterly volume snapshots -> coins that were ever in the top 40.
-snaps = [m for m in months if int(m[5:]) in (1, 4, 7, 10)]
-with ThreadPoolExecutor(32) as pool:
-    vol = dict(zip([(b, m) for b in coins for m in snaps],
-                   pool.map(lambda bm: sum(float(r[7]) for r in get(kline(*bm))), [(b, m) for b in coins for m in snaps])))
-keep = set()
-for m in snaps:
-    keep |= set(sorted(coins, key=lambda b: -vol[(b, m)])[:TOP])
-keep = sorted(keep)
-print(f"{len(keep)} coins were in the top {TOP} by USDT volume at some quarterly snapshot:", " ".join(keep), flush=True)
-
-# 3. Full daily candles and funding rates.
-os.makedirs("data/universe", exist_ok=True)
-os.makedirs("data/universe_funding", exist_ok=True)
-with ThreadPoolExecutor(32) as pool:
-    for b in keep:
-        if os.path.exists(f"data/universe_funding/{b}.csv.gz"):
-            continue                                   # resume after an interruption
-        rows = [r[:6] + r[7:10] for c in pool.map(lambda m: get(kline(b, m)), months) for r in c]
-        with gzip.open(f"data/universe/{b}.csv.gz", "wt", newline="") as fh:
-            w = csv.writer(fh)
-            w.writerow(["time", "open", "high", "low", "close", "volume", "quote_volume", "trades", "taker_buy_volume"])
-            w.writerows(rows)
-        fr = [[r[0], r[-1]] for c in pool.map(lambda m: get(funding(perp[b], m)), months) for r in c]
-        with gzip.open(f"data/universe_funding/{b}.csv.gz", "wt", newline="") as fh:
-            w = csv.writer(fh)
-            w.writerow(["time", "funding_rate"])
-            w.writerows(fr)
-        print(f"{b:10s} {len(rows):5d} days {rows[0][0][:10] if rows else '-'} .. {rows[-1][0][:10] if rows else '-'}"
-              f"   funding {len(fr)} ({perp[b]})", flush=True)
+            fr = [[r[0], r[-1]] for c in pool.map(lambda m: get(funding(perp[b], m)), months) for r in c]
+            with gzip.open(f"data/universe_funding/{b}.csv.gz", "wt", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["time", "funding_rate"])
+                w.writerows(fr)
+            print(f"{b:10s} {len(rows):5d} days {rows[0][0][:10] if rows else '-'} .. {rows[-1][0][:10] if rows else '-'}"
+                  f"   funding {len(fr)} ({perp[b]})", flush=True)

@@ -38,6 +38,10 @@
   <div class="note">chosen at the start of the month from earlier months only (score = mean monthly net over all
     earlier months, averaged with the neighbouring entry thresholds); "flat" = no setting scored above 0</div>
   <div id="choices"></div></div>
+<div class="card" id="dailyCard" style="display:none; margin-bottom:12px"><h3>Daily positions</h3>
+  <div class="note">decided at 00:00 UTC, filled at the 01:00 UTC close, held one day · net = after fees and funding,
+    booked once the next day's 01:00 price is known · newest first</div>
+  <div id="daily"></div></div>
 <div class="card" id="gridCard"><h3>Threshold choice on development data (maker fees)</h3>
   <div class="note">entry threshold / exit ratio · bars: mean monthly net (of the worse development period, when the run
     has two) · line: net return per trade · orange = chosen, then used unchanged on later data</div>
@@ -62,7 +66,18 @@ function draw(d) {
       [${pc(r.monthly_ci[0])}, ${pc(r.monthly_ci[1])}]</td><td>${na(r.total, v => pc(v, 1))}</td>
       <td>${na(r.trades_per_day, v => v.toFixed(1))}</td><td>${na(r.hit_on_trades, v => pc(v, 1))}</td>
       <td>${na(r.net_per_trade, v => pc(v, 3))}</td><td>${pc(r.max_drawdown, 1)}</td></tr>`).join("") + `</table>`;
-  const nested = d.nested;
+  const nested = d.nested, daily = d.daily;
+  document.getElementById("dailyCard").style.display = daily ? "" : "none";
+  if (daily) {
+    document.getElementById("eqTitle").textContent = "Gain over time";
+    document.getElementById("eqNote").textContent = "cumulative net return per day · solid = maker fees, dashed = taker fees";
+    const cls = v => v == null ? "" : v > 0 ? "good" : v < 0 ? "bad" : "";
+    document.getElementById("daily").innerHTML = `<table><tr><th>day</th><th>long</th><th>short</th><th>coins</th>
+      <th>net, maker</th><th>net, taker</th></tr>` + daily.slice().reverse().map(r =>
+      `<tr><td>${r.date}</td><td>${r.long.join(" ")}</td><td>${r.short.join(" ")}</td><td>${r.coins}</td>
+       <td class="${cls(r.maker)}">${r.maker == null ? "pending" : pc(r.maker)}</td>
+       <td class="${cls(r.taker)}">${r.taker == null ? "pending" : pc(r.taker)}</td></tr>`).join("") + `</table>`;
+  }
   document.getElementById("choiceCard").style.display = nested ? "" : "none";
   document.getElementById("gridCard").style.display = d.grid ? "" : "none";
   if (nested) {
@@ -86,10 +101,10 @@ function draw(d) {
     shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: goal, y1: goal, line: { color: "#1a7f37", dash: "dash", width: 2 } },
              { type: "line", xref: "paper", x0: 0, x1: 1, y0: 0, y1: 0, line: { color: "#555", width: 1 } }] }, cfg);
 
-  const eqKeys = d.nested ? Object.keys(R) : makerKeys;
+  const eqKeys = d.nested || daily ? Object.keys(R) : makerKeys;
   Plotly.react("equity", eqKeys.map((k, i) => ({
-    x: R[k].equity.map(e => e[0]), y: R[k].equity.map(e => e[1]), name: d.nested ? k : k.replace(" maker 0.02%", ""),
-    line: { color: d.nested ? "#1f77b4" : colors[i % 4], dash: k.includes("taker") ? "dash" : "solid" } })), {
+    x: R[k].equity.map(e => e[0]), y: R[k].equity.map(e => e[1]), name: d.nested || daily ? k : k.replace(" maker 0.02%", ""),
+    line: { color: d.nested || daily ? "#1f77b4" : colors[i % 4], dash: k.includes("taker") ? "dash" : "solid" } })), {
     margin: { t: 8, r: 8, b: 40, l: 50 }, yaxis: { tickformat: ".0%" }, legend: { orientation: "h", y: -0.2 } }, cfg);
 
   if (!d.grid) return;

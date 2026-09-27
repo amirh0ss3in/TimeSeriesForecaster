@@ -65,6 +65,33 @@ python crypto_rank.py --walk-from=2021-01-01 --nested-from=2022-01 --save=rank20
 |---|---|
 | `backtest.html?run=rank_pit20_d1` | monthly returns against the goal, gain over time, the setting chosen each month |
 
+## Paper trading (`rank_trader.py`, frozen)
+
+The frozen system uses the setting the honest test chose every month since mid-2025: the point-in-time top 20, hold
+1 day, long the top 3 and short the bottom 3 (16.7% of capital each), filled at the 01:00 UTC close. It imports the
+same functions as `crypto_rank.py`, and each month's models are trained once and saved in `checkpoints/rank_trader/`.
+
+```bash
+python rank_trader.py update     # latest candles, hourly closes and funding from Binance's public API
+python rank_trader.py step       # today's decision (after 00:00 UTC); books earlier days -> runs/rank_paper.json
+python rank_trader.py check      # replays Jul 2026 and compares it with the backtest
+python rank_trader.py replay --from=2026-09-01 --to=2026-09-26 --log=rank_replay_sep
+```
+
+Run `update` and then `step` every day shortly after 01:00 UTC. That's when the 01:00 fill price for the day's
+trades is known, and the previous day can be booked. The log is at `backtest.html?run=rank_paper`: daily positions,
+net per day with maker and taker fees, and gain over time.
+
+Checks passed:
+- `check`: the frozen code reproduces the backtest's July 2026 result exactly (−2.59% maker, −3.46% taker).
+- **September 2026 (never used by the ranking work), Sept 1–26:** +14.9% with maker fees, +14.1% with taker fees,
+  18 of 26 days positive (`backtest.html?run=rank_replay_sep`). One month is a small sample; the backtest's months
+  range from about −10% to +20%.
+- `update` keeps archive rows as they are and only appends new days. A coin not on disk is added once it is in the
+  top 40 by 24-hour volume.
+
+Judge the paper test after a few months against the 2% goal, with taker fees, without changing anything.
+
 ## The hourly direction pipeline (earlier, still in the root)
 
 `crypto_features.py`, `crypto_probe.py`, `crypto_backtest.py`, `crypto_nested.py` and `leak_check.py` predict each
