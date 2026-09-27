@@ -27,16 +27,16 @@
   <div class="note" id="rules"></div>
   <div id="table"></div></div>
 <div class="grid">
-  <div class="card"><h3>Monthly net return, test period</h3>
-    <div class="note">dashed green = the 3% goal · maker and taker fees</div>
+  <div class="card"><h3>Monthly net return</h3>
+    <div class="note">dashed green = the 3% goal · maker fees · every period in this run</div>
     <div id="monthly" style="height:300px"></div></div>
   <div class="card"><h3>Equity (cumulative net log return)</h3>
-    <div class="note">maker fees · validation 2025 and test 2026</div>
+    <div class="note">maker fees · each period starts at 0</div>
     <div id="equity" style="height:300px"></div></div>
 </div>
-<div class="card"><h3>Threshold choice on validation 2025 (maker fees)</h3>
-  <div class="note">the threshold with the best mean month on 2025 is used unchanged on 2026 · bars: mean monthly net ·
-    line: net return per trade</div>
+<div class="card"><h3>Threshold choice on development data (maker fees)</h3>
+  <div class="note">entry threshold / exit ratio · bars: mean monthly net (of the worse development period, when the run
+    has two) · line: net return per trade · orange = chosen, then used unchanged on later data</div>
   <div id="grid" style="height:280px"></div></div>
 
 <script>
@@ -50,31 +50,33 @@ function draw(d) {
   const goal = d.goal_monthly, R = d.results;
   document.getElementById("status").innerHTML = `<b>${d.name}</b> · predictions: validation <b>${d.val_preds}</b>, test <b>${d.test_preds}</b>`;
   document.getElementById("rules").textContent = `signal: ${d.signal || "prob"} · allocation: ${d.alloc || "slices"} · ` +
-    `threshold chosen on 2025: ${d.threshold} · perpetual futures, no leverage, fees on every position change · goal: > ${pc(goal, 0)} net per month`;
+    `entry threshold ${d.threshold}` + (d.exit_ratio != null ? `, exit ratio ${d.exit_ratio}` : "") + ` · perpetual futures, no leverage, fees on every position change · goal: > ${pc(goal, 0)} net per month`;
   document.getElementById("table").innerHTML = `<table><tr><th></th><th>mean month [95% range]</th><th>trades/day</th>
     <th>hit on trades</th><th>net per trade</th><th>worst drawdown</th></tr>` + Object.entries(R).map(([k, r]) =>
     `<tr><td>${k}</td><td><b class="${r.monthly_mean > goal ? "good" : r.monthly_mean < 0 ? "bad" : ""}">${pc(r.monthly_mean)}</b>
       [${pc(r.monthly_ci[0])}, ${pc(r.monthly_ci[1])}]</td><td>${r.trades_per_day.toFixed(1)}</td><td>${pc(r.hit_on_trades, 1)}</td>
       <td>${pc(r.net_per_trade, 3)}</td><td>${pc(r.max_drawdown, 1)}</td></tr>`).join("") + `</table>`;
 
-  const months = Object.keys(R["test maker 0.02%"].monthly);
-  Plotly.react("monthly", ["test maker 0.02%", "test taker 0.05%"].map((k, i) => ({
-    type: "bar", name: k.replace("test ", ""), x: months, y: months.map(m => R[k].monthly[m]),
-    marker: { color: i ? "#b2182b" : "#1f77b4" } })), {
+  const makerKeys = Object.keys(R).filter(k => k.includes("maker"));
+  const colors = ["#1f77b4", "#ff7f0e", "#d62728", "#2ca02c"];
+  Plotly.react("monthly", makerKeys.map((k, i) => ({
+    type: "bar", name: k.replace(" maker 0.02%", ""), x: Object.keys(R[k].monthly), y: Object.values(R[k].monthly),
+    marker: { color: colors[i % 4] } })), {
     margin: { t: 8, r: 8, b: 40, l: 50 }, yaxis: { tickformat: ".0%" }, barmode: "group", legend: { orientation: "h", y: -0.2 },
     shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: goal, y1: goal, line: { color: "#1a7f37", dash: "dash", width: 2 } },
              { type: "line", xref: "paper", x0: 0, x1: 1, y0: 0, y1: 0, line: { color: "#555", width: 1 } }] }, cfg);
 
-  Plotly.react("equity", ["val maker 0.02%", "test maker 0.02%"].map((k, i) => ({
-    x: R[k].equity.map(e => e[0]), y: R[k].equity.map(e => e[1]), name: k.split(" ")[0] === "val" ? "validation 2025" : "test 2026",
-    line: { color: i ? "#d62728" : "#1f77b4" } })), {
+  Plotly.react("equity", makerKeys.map((k, i) => ({
+    x: R[k].equity.map(e => e[0]), y: R[k].equity.map(e => e[1]), name: k.replace(" maker 0.02%", ""),
+    line: { color: colors[i % 4] } })), {
     margin: { t: 8, r: 8, b: 40, l: 50 }, yaxis: { tickformat: ".0%" }, legend: { orientation: "h", y: -0.2 } }, cfg);
 
-  const g = d.grid;
+  const g = d.grid, lab = r => r.exit_ratio == null ? String(r.threshold) : `${r.threshold} / ×${r.exit_ratio}`;
   Plotly.react("grid", [
-    { type: "bar", x: g.map(r => String(r.threshold)), y: g.map(r => r.monthly_mean), name: "mean month",
-      marker: { color: g.map(r => r.threshold === d.threshold ? "#ff7f0e" : "#1f77b4") } },
-    { x: g.map(r => String(r.threshold)), y: g.map(r => r.net_per_trade), name: "net per trade", yaxis: "y2",
+    { type: "bar", x: g.map(lab), y: g.map(r => r.monthly_mean), name: "mean month",
+      marker: { color: g.map(r => r.threshold === d.threshold && (r.exit_ratio == null || r.exit_ratio === d.exit_ratio)
+                                  ? "#ff7f0e" : "#1f77b4") } },
+    { x: g.map(lab), y: g.map(r => r.net_per_trade), name: "net per trade", yaxis: "y2",
       mode: "lines+markers", line: { color: "#2ca02c" } }], {
     margin: { t: 8, r: 60, b: 40, l: 50 }, xaxis: { title: { text: "threshold", standoff: 4 }, type: "category" },
     yaxis: { tickformat: ".1%" }, yaxis2: { overlaying: "y", side: "right", tickformat: ".3%" },

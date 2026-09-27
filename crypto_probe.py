@@ -1,7 +1,9 @@
 """Where is the direction signal? Fast models on the hourly feature table, scored on 2025 validation.
 
 Usage: python crypto_probe.py [--target=y1|y24] [--features=a,b,c] [--coins=BTC,ETH] [--obj=binary] [--test]
-                              [--seeds=N] [--refit] [--perp] [--wide]
+                              [--seeds=N] [--refit] [--perp] [--wide] [--weight=move] [--walk]
+  --weight=move: each training hour counts in proportion to the size of its move (capped at 3 sigma).
+  --walk: refit monthly over 2026; months from HOLDOUT on are predicted and saved but never scored or printed.
                               [--save=NAME]   (writes runs/NAME.json for direction.html)
 
 Splits by time with a 25-hour purge between them, so no target overlaps the next split:
@@ -27,6 +29,7 @@ inputs = arg("features", ",".join(INPUTS)).split(",")
 coins = arg("coins", "")
 use_test = "--test" in sys.argv
 ES, VAL, TEST = pd.Timestamp("2024-10-01"), pd.Timestamp("2025-01-01"), pd.Timestamp("2026-01-01")
+HOLDOUT = pd.Timestamp("2026-09-01")                # final holdout: never scored here
 purge = pd.Timedelta(hours=25)
 
 df = features()
@@ -43,7 +46,8 @@ df = df.dropna(subset=[c for c in inputs if c in INPUTS] + [target])   # wide an
 fit = df[df["time"] < ES - purge]
 stop = df[(df["time"] >= ES) & (df["time"] < VAL - purge)]
 val = df[(df["time"] >= VAL) & (df["time"] < TEST - purge)]
-test = df[df["time"] >= TEST]
+test = df[(df["time"] >= TEST) & (df["time"] < HOLDOUT - purge)]
+walk_rows = df[df["time"] >= TEST]                  # includes the holdout, for saved walk-forward predictions only
 clip = lambda y: y.clip(-5, 5)                       # heavy tails: fit on clipped targets, score on raw ones
 
 
@@ -66,6 +70,8 @@ binary = arg("obj", "regression") == "binary"          # binary: predict P(up), 
 half_life = float(arg("half-life", 0))                  # years; recency weighting of training rows (0 = off)
 age = (ES - fit["time"]).dt.days / 365.25
 weight = 0.5 ** (age / half_life) if half_life else None
+if arg("weight", "") == "move":                     # profit-aware: big moves matter more than small ones
+    weight = (weight if weight is not None else 1.0) * fit[target].abs().clip(upper=3)
 if binary:
     model = lgb.LGBMClassifier(**params)
     keep_f, keep_s = fit[target] != 0, stop[target] != 0
@@ -118,34 +124,27 @@ if arg("save", ""):
     print(f"saved runs/{name}.json  ->  http://localhost:8000/direction.html?run={name}")
 
 if "--walk" in sys.argv and binary:
-    # Walk-forward test: at the start of each 2026 month, refit on everything before it (25-hour purge) with the tree
-    # count chosen above, then predict that month. The model trained once is scored month by month alongside it.
+    # Walk-forward: at the start of each month from 2026-01, refit on everything before it (25-hour purge) with the tree
+    # count chosen above, then predict that month. Months from HOLDOUT on are predicted and saved, never scored.
     trees = int(model.best_iteration_ * 1.1)
-    static_p = model.predict(test[inputs])
     parts, monthly = [], []
     for M in pd.date_range(TEST, df["time"].max(), freq="MS"):
         base = df[(df["time"] < M - purge) & (df[target] != 0)]
-        mdl = lgb.LGBMClassifier(**{**params, "n_estimators": trees}).fit(base[inputs], base[target] > 0)
-        mm = ((test["time"] >= M) & (test["time"] < M + pd.offsets.MonthBegin(1))).to_numpy()
-        pw = mdl.predict_proba(test.loc[mm, inputs])[:, 1] - 0.5
-        sw = direction_stats(test["time"].to_numpy()[mm], test[target].to_numpy()[mm], pw, boot=100)
-        ss = direction_stats(test["time"].to_numpy()[mm], test[target].to_numpy()[mm], static_p[mm], boot=100)
-        monthly.append({"month": str(M)[:7], "hit": sw["hit"], "top20": sw["top20"], "n": sw["n"],
-                        "static_hit": ss["hit"], "static_top20": ss["top20"]})
-        parts.append(pd.DataFrame({"i": np.flatnonzero(mm), "p": pw}))
-        print(f"{str(M)[:7]}  retrained {sw['hit'][0]:.2%} (top20 {sw['top20'][0]:.2%})   "
-              f"trained once {ss['hit'][0]:.2%} (top20 {ss['top20'][0]:.2%})", flush=True)
-    wp = pd.concat(parts).sort_values("i")
-    tw = test.iloc[wp["i"].to_numpy()]
-    walk = score(tw, wp["p"].to_numpy(), "WALK-FORWARD TEST 2026, lightgbm", prob=wp["p"].to_numpy() + 0.5)
-    walk_coins = {c: direction_stats(g["time"].to_numpy(), g[target].to_numpy(), wp["p"].to_numpy()[(tw["coin"] == c).to_numpy()],
-                                     boot=200) for c, g in tw.groupby("coin")}
+        w = None if arg("weight", "") != "move" else base[target].abs().clip(upper=3)
+        mdl = lgb.LGBMClassifier(**{**params, "n_estimators": trees}).fit(base[inputs], base[target] > 0, sample_weight=w)
+        mm = ((walk_rows["time"] >= M) & (walk_rows["time"] < M + pd.offsets.MonthBegin(1))).to_numpy()
+        pw = mdl.predict_proba(walk_rows.loc[mm, inputs])[:, 1]
+        parts.append(pd.DataFrame({"coin": walk_rows["coin"].to_numpy()[mm], "time": walk_rows["time"].to_numpy()[mm], "prob": pw}))
+        if M < HOLDOUT:
+            sw = direction_stats(walk_rows["time"].to_numpy()[mm], walk_rows[target].to_numpy()[mm], pw - 0.5, boot=100)
+            monthly.append({"month": str(M)[:7], "hit": sw["hit"], "top20": sw["top20"], "n": sw["n"]})
+            print(f"{str(M)[:7]}  refit {sw['hit'][0]:.2%} (top20 {sw['top20'][0]:.2%})", flush=True)
+        else:
+            print(f"{str(M)[:7]}  (holdout: predicted and saved, not scored)", flush=True)
+    wp = pd.concat(parts)
+    dev = wp[wp["time"] < HOLDOUT - purge].merge(df[["coin", "time", target]], on=["coin", "time"])
+    score(dev, dev["prob"].to_numpy() - 0.5, "WALK-FORWARD 2026 (before holdout)", prob=dev["prob"].to_numpy())
     if arg("save", ""):
-        wname = arg("save", "") + "_walk"
-        once = direction_stats(test["time"].to_numpy(), test[target].to_numpy(), static_p)
-        write_json(f"runs/{wname}.json", {"name": wname, "kind": "lightgbm refit monthly (walk-forward)",
-                                          "title": "Test Jan–Aug 2026, refit at the start of every month", "done": True,
-                                          "snapshots": [], "config": {"trees": trees, "inputs": inputs},
-                                          "reference": {"same model, trained once through 2024": once},
-                                          "val": {"pooled": walk, "per_coin": walk_coins}, "monthly": monthly})
-        print(f"saved runs/{wname}.json  ->  http://localhost:8000/direction.html?run={wname}")
+        np.savez(f"checkpoints/preds_{arg('save', '')}_walk.npz", coin=wp["coin"].to_numpy(), time=wp["time"].to_numpy(),
+                 prob=wp["prob"].to_numpy())
+        print(f"saved checkpoints/preds_{arg('save', '')}_walk.npz")

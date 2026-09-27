@@ -3,7 +3,8 @@ hour, the probability that the next hour's move is up (5-model ensemble, stacked
 Watch it in direction.html?run=<name>.
 
 Usage: python crypto_seq.py [--coins=BTC,...] [--steps=4000] [--ctx=48] [--d=64] [--layers=2] [--lr=1e-3]
-                            [--dropout=0] [--wd=0.05] [--eval-every=250] [--select=stop|last] [--perp] [--test] [--name=...]
+                            [--dropout=0] [--wd=0.05] [--eval-every=250] [--select=stop|last] [--perp] [--test]
+                            [--weight=move] [--walk] [--name=...]
 
 Same splits as crypto_probe.py: fit < 2024-10-01, Oct-Dec 2024 picks the best checkpoint, validation = 2025,
 test = 2026 (only with --test). Inputs are standardized with fit-period statistics; attention is causal, so each
@@ -32,6 +33,8 @@ select = arg("select", "stop")   # stop: best Oct-Dec 2024 loss; last: final ste
 use_test = "--test" in sys.argv
 name = arg("name", f"direction_seq_{coins.replace(',', '_') or 'all'}_c{ctx}")
 ES, VAL, TEST = pd.Timestamp("2024-10-01"), pd.Timestamp("2025-01-01"), pd.Timestamp("2026-01-01")
+HOLDOUT = pd.Timestamp("2026-09-01")                # final holdout: predicted in --walk, never scored here
+move_weight = arg("weight", "") == "move"            # profit-aware: each hour weighted by its move size (<= 3 sigma)
 purge = pd.Timedelta(hours=25)
 torch.manual_seed(0)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -55,6 +58,8 @@ seg = np.flatnonzero(np.r_[True, df["coin"].to_numpy()[1:] != df["coin"].to_nump
 Xg = torch.tensor(np.vstack([X, np.zeros((ctx, X.shape[1]), np.float32)]), device=dev)    # padded at the end
 Lg = torch.tensor(np.r_[(y > 0).astype(np.float32), np.zeros(ctx, np.float32)], device=dev)
 Vg = torch.tensor(np.r_[valid, np.zeros(ctx, bool)], device=dev)
+Wg = torch.tensor(np.r_[np.clip(np.abs(np.nan_to_num(y)), 0, 3) if move_weight else np.ones(len(y)), np.zeros(ctx)],
+                  dtype=torch.float32, device=dev) * Vg.float()      # per-row loss weight (0 where no target)
 span = torch.arange(ctx, device=dev)
 
 # Training windows: ctx consecutive rows of one coin, all in the fit period.
@@ -72,7 +77,7 @@ def split_rows(lo, hi):
 
 
 SPLITS = {"stop": split_rows(ES, VAL - purge), "val": split_rows(VAL, TEST - purge),
-          "test": split_rows(TEST, pd.Timestamp("2100-01-01"))}
+          "test": split_rows(TEST, HOLDOUT - purge)}
 
 # ---- model ----
 model = Ensemble(n_models, ctx, d_model, heads, layers, window_norm=False, n_in=X.shape[1], n_out=1,
@@ -128,7 +133,7 @@ def train_steps(starts, n_steps):
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, n_steps)
     for _ in range(n_steps):
         rows = starts[torch.randint(0, len(starts), (n_models, batch), device=dev)][..., None] + span
-        v = Vg[rows].float()
+        v = Wg[rows]
         loss = (F.binary_cross_entropy_with_logits(model(Xg[rows])[..., 0], Lg[rows], reduction="none") * v).sum() / v.sum()
         opt.zero_grad()
         loss.backward()
@@ -153,13 +158,18 @@ if "--walk" in sys.argv:
         ranges = split_rows(M, M + pd.offsets.MonthBegin(1))
         idx = np.concatenate([np.arange(p, q) for p, q in ranges])
         p = predict(ranges)[idx]
-        ms = direction_stats(t[idx], y[idx], p - 0.5, boot=100)
-        monthly.append({"month": str(M)[:7], "hit": ms["hit"], "top20": ms["top20"], "n": ms["n"]})
         idx_all.append(idx)
         prob_all.append(p)
+        if M >= HOLDOUT:
+            print(f"{str(M)[:7]}  (holdout: predicted and saved, not scored)  ({time.time() - t0:.0f}s)", flush=True)
+            continue
+        ms = direction_stats(t[idx], y[idx], p - 0.5, boot=100)
+        monthly.append({"month": str(M)[:7], "hit": ms["hit"], "top20": ms["top20"], "n": ms["n"]})
         print(f"{str(M)[:7]}  trained on {len(starts)} windows  " + line("", ms)[34:] + f"  ({time.time() - t0:.0f}s)",
               flush=True)
-    idx, prob = np.concatenate(idx_all), np.concatenate(prob_all)
+    idx_save, prob_save = np.concatenate(idx_all), np.concatenate(prob_all)
+    keep = t[idx_save] < np.datetime64(HOLDOUT - purge)
+    idx, prob = idx_save[keep], prob_save[keep]
     pooled = direction_stats(t[idx], y[idx], prob - 0.5, prob=prob)
     per_coin = {c: direction_stats(t[idx][cc[idx] == c], y[idx][cc[idx] == c], prob[cc[idx] == c] - 0.5,
                                    prob=prob[cc[idx] == c], boot=200) for c in sorted(set(cc[idx]))}
@@ -173,7 +183,7 @@ if "--walk" in sys.argv:
                                      "done": True, "snapshots": [], "config": {"steps_per_month": steps, "ctx": ctx,
                                      "lr": lr, "dropout": dropout, "weight_decay": wd}, "reference": ref,
                                      "val": {"pooled": pooled, "per_coin": per_coin}, "monthly": monthly})
-    np.savez(f"checkpoints/preds_{name}.npz", coin=cc[idx], time=t[idx], prob=prob)
+    np.savez(f"checkpoints/preds_{name}.npz", coin=cc[idx_save], time=t[idx_save], prob=prob_save)
     sys.exit()
 
 # ---- train ----
@@ -206,7 +216,7 @@ for step in range(steps + 1):
     s = fit_starts[torch.randint(0, len(fit_starts), (n_models, batch), device=dev)]
     rows = s[..., None] + span
     logit = model(Xg[rows])[..., 0]
-    v = Vg[rows].float()
+    v = Wg[rows]
     loss = (F.binary_cross_entropy_with_logits(logit, Lg[rows], reduction="none") * v).sum() / v.sum()
     opt.zero_grad()
     loss.backward()
