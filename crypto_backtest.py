@@ -9,6 +9,9 @@ Usage: python crypto_backtest.py --dev=NAME[,NAME...] [--holdout=NAME[,NAME...]]
 Rules, fixed before looking at results:
 - Perpetual futures (shorting allowed), no leverage. --alloc=slices: each coin always gets 1 / n_coins of the capital
   (idle when flat). --alloc=active: each hour the capital is split equally among the coins with a position.
+  active_cap2: the same, but at most 50% per coin. fixedK (e.g. fixed5): every position gets 1/K of the capital, at
+  most K at once (the strongest edges win), so positions are never re-split.
+- --funding: positions open at a funding time pay (long) or receive (short) that coin's funding rate.
 - A coin goes long/short when its edge |P(up) - 0.5| reaches the entry threshold, and stays in while the edge keeps
   the same sign and is at least the exit threshold (= exit ratio x entry threshold); otherwise it is flat.
   --signal=move: the edge is the expected move converted to a return with the coin's current volatility, in
@@ -46,10 +49,11 @@ def load_one(name):
     return p.merge(features()[["coin", "time", "r1", "sig"]], on=["coin", "time"])
 
 
-def positions(edge, thr_in, thr_out):
-    """Enter at |edge| >= thr_in, stay while the sign holds and |edge| >= thr_out, else flat."""
+def positions(edge, thr_in, thr_out, start=None):
+    """Enter at |edge| >= thr_in, stay while the sign holds and |edge| >= thr_out, else flat.
+    start: positions held before the first row (live trading continues from the previous hour)."""
     e = np.nan_to_num(edge.to_numpy())
-    pos, cur = np.zeros_like(e), np.zeros(e.shape[1])
+    pos, cur = np.zeros_like(e), (np.zeros(e.shape[1]) if start is None else np.asarray(start, float))
     for i in range(len(e)):
         s = np.sign(e[i])
         keep = (cur != 0) & (s == cur) & (np.abs(e[i]) >= thr_out)
@@ -59,7 +63,38 @@ def positions(edge, thr_in, thr_out):
     return pd.DataFrame(pos, index=edge.index, columns=edge.columns)
 
 
-def run(p, thr, fee, boot=300, seed=0, alloc="slices", signal="prob", exit_ratio=1.0):
+_FUNDING = None
+
+
+def funding_table():
+    """Funding rate per coin at each funding time (wide), from data/crypto_funding."""
+    global _FUNDING
+    if _FUNDING is None:
+        import glob, os
+        _FUNDING = pd.DataFrame({os.path.basename(f)[:-7]: pd.read_csv(f, parse_dates=["time"]).drop_duplicates("time")
+                                 .set_index("time")["funding_rate"] for f in glob.glob("data/crypto_funding/*.csv.gz")})
+        _FUNDING.index = _FUNDING.index.floor("h")
+        _FUNDING = _FUNDING.groupby(level=0).sum()
+    return _FUNDING
+
+
+def weights(pos, edge, alloc):
+    """Capital weight per coin and hour from positions (+1/-1/0). Returns (positions actually held, weights)."""
+    if alloc.startswith("fixed"):                 # at most K positions, the strongest edges win
+        k = int(alloc[5:])
+        rank = edge.abs().where(pos != 0).rank(axis=1, ascending=False, method="first")
+        pos = pos.where(rank <= k, 0.0)
+    n_active = (pos != 0).sum(1)
+    if alloc == "active":
+        return pos, pos.div(n_active.where(n_active > 0, 1), axis=0)
+    if alloc == "active_cap2":
+        return pos, pos.div(n_active.clip(lower=2), axis=0)
+    if alloc.startswith("fixed"):
+        return pos, pos / int(alloc[5:])
+    return pos, pos / pos.shape[1]
+
+
+def run(p, thr, fee, boot=300, seed=0, alloc="slices", signal="prob", exit_ratio=1.0, funding=False):
     if signal == "move":                     # edge measured in round-trip fees: expected return / (2 x fee)
         p = p.assign(prob=0.5 + p["exp_move"] * p["sig"] / (2 * fee))
     prob = p.pivot(index="time", columns="coin", values="prob")
@@ -68,10 +103,13 @@ def run(p, thr, fee, boot=300, seed=0, alloc="slices", signal="prob", exit_ratio
     prob, r1 = prob.reindex(grid), r1.reindex(grid)
     edge = prob - 0.5
     pos = positions(edge, thr, thr * exit_ratio)
+    pos, weight = weights(pos, edge, alloc)
     n_active = (pos != 0).sum(1)
-    weight = pos.div(n_active.where(n_active > 0, 1), axis=0) if alloc == "active" else pos / pos.shape[1]
     cost = (weight - weight.shift(1).fillna(0.0)).abs() * fee   # fees on every change of capital weight
     pnl = weight * r1.fillna(0.0) - cost                        # contribution of each coin to the portfolio
+    if funding:   # row t earns candle t+1, which ends at t+2h: funding stamped then is paid by row t's position
+        f = funding_table().reindex(index=grid + pd.Timedelta(hours=2), columns=pnl.columns).fillna(0.0)
+        pnl = pnl - weight * f.to_numpy()
     port = pnl.sum(1)
     traded = pos != 0
     n_tr = int(traded.sum().sum())
@@ -81,7 +119,8 @@ def run(p, thr, fee, boot=300, seed=0, alloc="slices", signal="prob", exit_ratio
     draws = np.random.default_rng(seed).integers(0, len(days), (boot, len(days)))
     per_month = days[draws].mean(1) * 30.44                    # mean monthly return, resampled by day
     eq = port.cumsum()
-    return {"threshold": thr, "exit_ratio": exit_ratio, "fee": fee, "monthly_mean": float(monthly.mean()),
+    return {"threshold": thr, "exit_ratio": exit_ratio, "fee": fee, "alloc": alloc, "funding": funding,
+            "by_coin": {c: float(v) for c, v in pnl.sum().items()}, "monthly_mean": float(monthly.mean()),
             "monthly_ci": [float(x) for x in np.percentile(per_month, [2.5, 97.5])],
             "monthly": {str(k): float(v) for k, v in monthly.items()}, "trades_per_day": n_tr / (len(grid) / 24),
             "hit_on_trades": hit, "net_per_trade": float((pos * r1.fillna(0.0) - (pos - pos.shift(1).fillna(0.0)).abs()

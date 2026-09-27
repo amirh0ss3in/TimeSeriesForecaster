@@ -2,7 +2,8 @@
 
 Candidates are in market-cap order (CoinGecko, 2026-09-27) without stablecoins, gold tokens and exchange tokens not
 traded on Binance; the first 20 with a <COIN>USDT hourly archive are kept.
-Usage: python fetch_crypto.py [--interval=1h|5m] [--market=spot|perp|premium] [--daily]
+Usage: python fetch_crypto.py [--interval=1h|5m] [--market=spot|perp|premium|funding] [--daily]
+  funding: perp funding-rate history (data/crypto_funding/<COIN>.csv.gz: time, funding_rate), monthly files only.
   --daily: fetch the current month's daily files up to yesterday and merge them into the existing files.
   5m goes to data/crypto_5m/. perp = USDT-margined perpetual futures candles (data/crypto_perp/), premium = their
   premium-index candles, i.e. (perp - spot index) / index (data/crypto_premium/); both use the same 20 coins as spot.
@@ -26,13 +27,16 @@ CANDIDATES = ["BTC", "ETH", "BNB", "XRP", "SOL", "TRX", "ZEC", "HYPE", "DOGE", "
 arg = lambda k, d: next((a.split("=")[1] for a in sys.argv if a.startswith(f"--{k}=")), d)
 IV, MARKET = arg("interval", "1h"), arg("market", "spot")
 PATH = {"spot": "spot/monthly/klines", "perp": "futures/um/monthly/klines",
-        "premium": "futures/um/monthly/premiumIndexKlines"}[MARKET]
+        "premium": "futures/um/monthly/premiumIndexKlines", "funding": "futures/um/monthly/fundingRate"}[MARKET]
 N_COINS, FIRST = 20, (2017, 8)
 OUT = "data/crypto" + ("" if MARKET == "spot" else f"_{MARKET}") + ("" if IV == "1h" else f"_{IV}")
 DAILY = "--daily" in sys.argv
 if DAILY:
     PATH = PATH.replace("/monthly/", "/daily/")
 URL = f"https://data.binance.vision/data/{PATH}/{{s}}/{IV}/{{s}}-{IV}-{{p}}.zip"   # p: 2026-08 or 2026-09-01
+if MARKET == "funding":
+    URL = f"https://data.binance.vision/data/{PATH}/{{s}}/{{s}}-fundingRate-{{p}}.zip"
+    OUT = "data/crypto_funding"
 PERP_NAME = {"SHIB": "1000SHIB"}                     # futures list some small-price coins per 1000 units
 symbol = lambda coin: (coin if MARKET == "spot" else PERP_NAME.get(coin, coin)) + "USDT"
 
@@ -64,6 +68,9 @@ def get(sym, period):
             continue
         t = int(line[0])
         t = t // 1000 if t > 10 ** 14 else t         # spot files switched from milliseconds to microseconds in 2025
+        if MARKET == "funding":                      # calc_time, funding_interval_hours, last_funding_rate
+            rows.append([dt.datetime.fromtimestamp(t / 1000, dt.UTC).strftime("%Y-%m-%d %H:%M"), line[-1]])
+            continue
         rows.append([dt.datetime.fromtimestamp(t / 1000, dt.UTC).strftime("%Y-%m-%d %H:%M")] + line[1:6] + line[7:10])
     return rows
 
@@ -94,6 +101,7 @@ with ThreadPoolExecutor(16) as pool:
             rows = [r for c in pool.map(lambda p: get(symbol(coin), p), months) for r in c]
         with gzip.open(f"{OUT}/{coin}.csv.gz", "wt", newline="") as fh:
             w = csv.writer(fh)
-            w.writerow(["time", "open", "high", "low", "close", "volume", "quote_volume", "trades", "taker_buy_volume"])
+            w.writerow(["time", "funding_rate"] if MARKET == "funding" else
+                       ["time", "open", "high", "low", "close", "volume", "quote_volume", "trades", "taker_buy_volume"])
             w.writerows(rows)
         print(f"{coin:5s} {len(rows):7d} candles  {rows[0][0]} .. {rows[-1][0]}", flush=True)

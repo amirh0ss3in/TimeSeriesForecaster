@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Trading</title>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<style>
+  html, body { overflow-x: hidden; }
+  body { font-family: system-ui, sans-serif; margin: 16px; background: #fafafa; color: #222; }
+  #status { font-size: 14px; margin-bottom: 8px; }
+  b { font-variant-numeric: tabular-nums; }
+  .err { color: #c00; }
+  .grid { display: grid; gap: 12px; margin-bottom: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px 10px 4px; min-width: 0; }
+  .card h3 { margin: 0 0 2px; font-size: 15px; }
+  .note { font-size: 12px; color: #666; margin-bottom: 4px; }
+  table { border-collapse: collapse; font-size: 13px; width: 100%; margin: 4px 0 8px; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  .up { color: #1a7f37; } .down { color: #b2182b; }
+  .scroll { max-height: 360px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<div id="status">Loading…</div>
+<div class="card" style="margin-bottom:12px"><h3>Summary</h3>
+  <div class="note" id="rules"></div><div id="summary"></div></div>
+<div class="grid">
+  <div class="card"><h3>Equity (cumulative net log return)</h3>
+    <div class="note">solid = maker fees (0.02%), dashed = taker fees (0.05%) · one line per allocation variant</div>
+    <div id="equity" style="height:320px"></div></div>
+  <div class="card"><h3>Net return per month (maker fees)</h3>
+    <div class="note">dashed green = the 3% goal</div>
+    <div id="monthly" style="height:320px"></div></div>
+</div>
+<div class="card"><h3>Hourly log (latest first)</h3>
+  <div class="note">positions after each decision: ▲ long, ▼ short · variant shown: <select id="variant"></select></div>
+  <div class="scroll" id="log"></div></div>
+
+<script>
+const run = new URLSearchParams(location.search).get("run") || "paper_log";
+const cfg = { responsive: true, displaylogo: false };
+const COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"];
+const pc = (v, d = 2) => `${(100 * v).toFixed(d)}%`;
+let data = null;
+
+async function poll() {
+  try {
+    const r = await fetch(`runs/${run}.json?t=${Date.now()}`);
+    if (!r.ok) throw new Error(`runs/${run}.json not found — start paper trading with: python trader.py step`);
+    const d = await r.json();
+    if (!data || d.hours.length !== data.hours.length) { data = d; draw(); }
+  } catch (e) { document.getElementById("status").innerHTML = `<span class="err">${e.message}</span>`; }
+  setTimeout(poll, 5000);
+}
+
+function draw() {
+  const H = data.hours, S = data.settings, V = S.variants, fees = Object.keys(S.fees);
+  const last = H[H.length - 1];
+  document.getElementById("status").innerHTML = `<b>${data.name}</b> · ${H.length} hourly decisions · ` +
+    (H.length ? `${H[0].time} → <b>${last.time}</b>` : "no decisions yet");
+  document.getElementById("rules").textContent = `entry edge ${S.entry}, exit at ${S.exit_ratio} × entry · ` +
+    `LightGBM ${S.trees} trees, retrained monthly · perpetual futures, no leverage, funding included`;
+  if (!H.length) return;
+  const days = H.length / 24;
+  document.getElementById("summary").innerHTML = `<table><tr><th>variant</th>${fees.map(f => `<th>total, ${f}</th><th>per 30 days, ${f}</th>`).join("")}
+    <th>open positions now</th></tr>` + V.map(v => {
+      const eq = last.variants[v].equity, pos = last.variants[v].positions;
+      return `<tr><td>${v}</td>${fees.map(f => `<td><b>${pc(eq[f])}</b></td><td>${pc(eq[f] / days * 30)}</td>`).join("")}
+        <td>${Object.entries(pos).map(([c, p]) => `<span class="${p > 0 ? "up" : "down"}">${p > 0 ? "▲" : "▼"}${c}</span>`).join(" ") || "—"}</td></tr>`;
+    }).join("") + `</table>`;
+
+  const t = H.map(h => h.time);
+  Plotly.react("equity", V.flatMap((v, i) => fees.map((f, j) => ({
+    x: t, y: H.map(h => h.variants[v].equity[f]), name: j ? `${v} (taker)` : v, showlegend: !j,
+    line: { color: COLORS[i % 5], dash: j ? "dash" : "solid", width: j ? 1 : 2 } }))),
+    { margin: { t: 8, r: 8, b: 40, l: 50 }, yaxis: { tickformat: ".1%" }, legend: { orientation: "h", y: -0.2 } }, cfg);
+
+  // Monthly net: equity change within each calendar month (maker).
+  const maker = fees[0], months = [...new Set(t.map(x => x.slice(0, 7)))];
+  const monthly = v => months.map(m => {
+    const hs = H.filter(h => h.time.startsWith(m)), prev = H[H.indexOf(hs[0]) - 1];
+    return hs[hs.length - 1].variants[v].equity[maker] - (prev ? prev.variants[v].equity[maker] : 0);
+  });
+  Plotly.react("monthly", V.map((v, i) => ({ type: "bar", name: v, x: months, y: monthly(v), marker: { color: COLORS[i % 5] } })), {
+    margin: { t: 8, r: 8, b: 40, l: 50 }, yaxis: { tickformat: ".1%" }, barmode: "group", legend: { orientation: "h", y: -0.2 },
+    shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0.03, y1: 0.03, line: { color: "#1a7f37", dash: "dash", width: 2 } }] }, cfg);
+
+  const sel = document.getElementById("variant");
+  if (!sel.options.length) { V.forEach(v => sel.add(new Option(v, v))); sel.onchange = drawLog; }
+  drawLog();
+}
+
+function drawLog() {
+  const v = document.getElementById("variant").value, rows = data.hours.slice(-200).reverse();
+  document.getElementById("log").innerHTML = `<table><tr><th>hour (UTC)</th><th>positions after decision</th>
+    <th>hour's gross</th><th>turnover</th><th>equity (maker)</th><th>most confident calls</th></tr>` + rows.map(h => {
+      const x = h.variants[v], top = Object.entries(h.prob).sort((a, b) => Math.abs(b[1] - 0.5) - Math.abs(a[1] - 0.5)).slice(0, 3);
+      return `<tr><td>${h.time}</td><td>${Object.entries(x.positions).map(([c, p]) =>
+        `<span class="${p > 0 ? "up" : "down"}">${p > 0 ? "▲" : "▼"}${c}</span>`).join(" ") || "—"}</td>
+        <td class="${x.gross > 0 ? "up" : x.gross < 0 ? "down" : ""}">${pc(x.gross, 3)}</td><td>${x.turnover.toFixed(2)}</td>
+        <td>${pc(x.equity[Object.keys(x.equity)[0]])}</td>
+        <td>${top.map(([c, p]) => `${c} ${(100 * p).toFixed(1)}%`).join(", ")}</td></tr>`;
+    }).join("") + `</table>`;
+}
+poll();
+</script>
+</body>
+</html>
