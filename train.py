@@ -1,8 +1,10 @@
 """Ensemble of decoder-only transformers, next-value prediction, forecast of an unseen range by sampling (like an LLM).
 
 Usage: python train.py <signal> [--raw] [--noise=STD]
-  signal: sin | trend | amp;  --raw turns off per-window normalization;  --noise adds Gaussian observation noise
-  to both training and test data (fixed seed). The forecast is scored against the noisy test values.
+  signal: sin | trend | amp | sunspots;  --raw turns off per-window normalization;  --noise adds Gaussian observation
+  noise to both training and test data of a synthetic signal (fixed seed). The forecast is scored against the noisy
+  test values.
+  sunspots: SILSO monthly mean total sunspot number (data/sunspots.csv); train before 1990, test from 1990 on.
 
 Ensemble: `n_models` independent transformers (different random init), stored as one set of stacked weights so all
 of them train and forecast together in single batched GPU calls.
@@ -29,17 +31,20 @@ SIGNALS = {
 }
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 signal_name = args[0] if args else "sin"
-signal = SIGNALS[signal_name]
+sunspots = signal_name == "sunspots"
 window_norm = "--raw" not in sys.argv
 noise = float(next((a.split("=")[1] for a in sys.argv if a.startswith("--noise=")), 0))  # observation noise std
 name = signal_name + (f"_noise{noise:g}" if noise else "") + ("" if window_norm else "_raw")
-n, m = 24, 40          # train on [0, nπ), test on [nπ, (n+m)π]
-pts_per_pi = 20        # sampling: h = π/20, so one period = 40 points
-ctx = 40               # context window (one period)
+n, m = 24, 40          # synthetic: train on [0, nπ), test on [nπ, (n+m)π]
+pts_per_pi = 20        # synthetic sampling: h = π/20, so one period = 40 points
+split_year = 1990      # sunspots: train before, test from here on
+ctx = 132 if sunspots else 40   # context window: ~one solar cycle (months) / one period
 d_model, heads, layers = 64, 4, 2
-steps, lr, log_every = 3000, 1e-3, 100
+steps, lr = 3000, 1e-3
+log_every = 200 if sunspots else 100   # each snapshot runs a full forecast, which is slower for long contexts
 n_models = 5          # ensemble size
-batch = 128            # random training windows per model per step (each model draws its own)
+batch = 48 if sunspots else 128   # random training windows per model per step (each model draws its own);
+                                  # ~same tokens per step for both context lengths
 n_paths = 100          # sampled forecast paths (split evenly across models)
 seed = 0
 
@@ -48,13 +53,21 @@ np.random.seed(seed)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ---- data ----
-h = math.pi / pts_per_pi
-x_train = np.arange(n * pts_per_pi) * h                           # [0, nπ)
-x_test = (n * pts_per_pi + np.arange(m * pts_per_pi + 1)) * h     # [nπ, (n+m)π]
-clean_test = signal(x_test)
-rng = np.random.default_rng(seed)
-y_train = signal(x_train) + noise * rng.standard_normal(len(x_train))
-y_test = clean_test + noise * rng.standard_normal(len(x_test))
+if sunspots:
+    raw = np.loadtxt("data/sunspots.csv", delimiter=";", usecols=(2, 3))   # decimal year, monthly sunspot number
+    tr = raw[:, 0] < split_year
+    x_train, y_train, x_test, y_test = raw[tr, 0], raw[tr, 1], raw[~tr, 0], raw[~tr, 1]
+    clean_test = None
+else:
+    h = math.pi / pts_per_pi
+    x_train = np.arange(n * pts_per_pi) * h                           # [0, nπ)
+    x_test = (n * pts_per_pi + np.arange(m * pts_per_pi + 1)) * h     # [nπ, (n+m)π]
+    signal = SIGNALS[signal_name]
+    clean_test = signal(x_test)
+    rng = np.random.default_rng(seed)
+    y_train = signal(x_train) + noise * rng.standard_normal(len(x_train))
+    y_test = clean_test + noise * rng.standard_normal(len(x_test))
+fmt_x = (lambda v: f"{v:.0f}") if sunspots else (lambda v: f"{v / math.pi:.0f}π")
 
 # Normalization uses training data only.
 mu, sd = y_train.mean(), y_train.std()
@@ -149,11 +162,13 @@ def forecast():
 
 
 # ---- train ----
-cfg = dict(signal=signal_name, noise=noise, window_norm=window_norm, n=n, m=m, pts_per_pi=pts_per_pi, ctx=ctx,
+cfg = dict(signal=signal_name, x_unit="year" if sunspots else "pi", noise=noise, window_norm=window_norm,
+           **(dict(split_year=split_year) if sunspots else dict(n=n, m=m, pts_per_pi=pts_per_pi)), ctx=ctx,
            d_model=d_model, heads=heads, layers=layers, steps=steps, lr=lr, n_models=n_models, n_paths=n_paths,
            batch=batch, train_windows=len(X), params_per_model=sum(p.numel() for p in model.parameters()) // n_models)
 print(cfg)
 mon = Monitor(name, x_train, y_train, x_test, y_test, config=cfg)
+mse_idx = torch.randperm(len(X), device=dev)[:256]   # fixed windows for the monitor's one-step MSE
 t0 = time.time()
 for step in range(steps + 1):
     idx = torch.randint(0, len(X), (n_models, batch), device=dev)   # a different random batch for each model
@@ -161,8 +176,8 @@ for step in range(steps + 1):
     loss = nll(mean, log_sigma, Y[idx])
     if step % log_every == 0 or step == steps:
         paths = forecast()
-        with torch.no_grad():                         # one-step MSE on all windows: comparable to earlier runs
-            mse = ((model(X.expand(n_models, -1, -1))[0] - Y) ** 2).mean().item()
+        with torch.no_grad():                         # one-step MSE on a fixed subset of windows (cheap, comparable)
+            mse = ((model(X[mse_idx].expand(n_models, -1, -1))[0] - Y[mse_idx]) ** 2).mean().item()
         score = mon.log(step, mse, np.median(paths, 0), band=np.percentile(paths, [2.5, 97.5], 0),
                         samples=paths[::n_paths // n_models][:3], paths=paths)  # samples: 1 path from each of 3 models
         print(f"step {step:5d}  nll {loss.item():+.3f}  one-step mse {mse:.2e}  test crps {score:.4f}"
@@ -183,10 +198,9 @@ inside = (y_test >= lo) & (y_test <= hi)
 cr = crps(paths, y_test)
 print(f"\nFinal test CRPS {cr.mean():.4f}   RMSE (median path) {np.sqrt(np.mean(err ** 2)):.4f}"
       f"   inside 95% band: {inside.mean():.0%}")
-if noise:
+if noise and clean_test is not None:
     print(f"RMSE of median vs clean curve {np.sqrt(np.mean((f - clean_test) ** 2)):.4f}   (noise std {noise:g})")
-seg = 4  # per 4π-segment: does the error grow, and does the band grow with it?
-for k in range(0, m, seg):
-    sl = slice(k * pts_per_pi, (k + seg) * pts_per_pi + 1)
-    print(f"  [{n + k}π, {n + k + seg}π]  CRPS {cr[sl].mean():.4f}   RMSE {np.sqrt(np.mean(err[sl] ** 2)):.4f}"
+for sl in np.array_split(np.arange(len(x_test)), 10):  # 10 segments: does the error grow, and the band with it?
+    print(f"  [{fmt_x(x_test[sl[0]])}, {fmt_x(x_test[sl[-1]])}]  CRPS {cr[sl].mean():.4f}"
+          f"   RMSE {np.sqrt(np.mean(err[sl] ** 2)):.4f}"
           f"   mean band width {(hi - lo)[sl].mean():.3f}   inside band {inside[sl].mean():.0%}")

@@ -70,7 +70,9 @@ function draw() {
   // Forecast plot: fixed y-range from the true curve so a diverging forecast doesn't rescale everything.
   const yAll = data.y_train.concat(data.y_test).filter(v => v != null);
   const yLo = Math.min(...yAll), yHi = Math.max(...yAll), pad = 0.3 * (yHi - yLo || 1);
-  const xTr = byPi(data.x_train), xTe = byPi(data.x_test);
+  const inPi = data.config.x_unit !== "year";          // synthetic runs: x in units of π; real data: raw x
+  const xs = a => inPi ? byPi(a) : a;
+  const xTr = xs(data.x_train), xTe = xs(data.x_test);
   // Optional band (upper edge invisible, lower edge filled up to it) and a few sampled paths.
   const extra = [];
   if (s && s.lo) {
@@ -89,7 +91,7 @@ function draw() {
   ], {
     title: { text: "Autoregressive forecast over the test range", font: { size: 14 } },
     margin: { t: 36, r: 16, b: 40, l: 48 },
-    xaxis: { title: "x / π" }, yaxis: { range: [yLo - pad, yHi + pad] },
+    xaxis: { title: inPi ? "x / π" : "year" }, yaxis: { range: [yLo - pad, yHi + pad] },
     shapes: [{ type: "rect", xref: "x", yref: "paper", x0: xTr[0], x1: xTr[xTr.length - 1], y0: 0, y1: 1,
                fillcolor: "#1f77b4", opacity: 0.08, line: { width: 0 } }],
     annotations: [{ x: xTr[0], y: 1, xref: "x", yref: "paper", text: "training region", showarrow: false,
