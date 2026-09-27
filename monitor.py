@@ -14,6 +14,16 @@ def _clean(a):
     return [round(float(v), 5) if np.isfinite(v) else None for v in a]
 
 
+def crps(paths, y):
+    """CRPS per point from sampled paths (n_paths, T) against truth y (T,). Lower is better, same units as y.
+    CRPS = E|X - y| - 0.5 E|X - X'|: rewards paths close to the truth, penalizes spread that doesn't help."""
+    x = np.sort(np.asarray(paths, dtype=float), 0)
+    n = len(x)
+    near = np.abs(x - y).mean(0)
+    spread = (2 * np.arange(1, n + 1) - n - 1) @ x * 2 / n ** 2   # E|X - X'| from sorted samples
+    return near - 0.5 * spread
+
+
 class Monitor:
     def __init__(self, name, x_train, y_train, x_test, y_test, config=None):
         os.makedirs(RUNS_DIR, exist_ok=True)
@@ -30,15 +40,20 @@ class Monitor:
         self._write()
         print(f"Monitor: http://localhost:8000/monitor.html?run={name}")
 
-    def log(self, step, loss, forecast, band=None, samples=None):
-        """Record one snapshot. Optional: band = (lower, upper) per point, samples = a few sampled paths.
-        The test RMSE is shown in the monitor only and is never used for training."""
+    def log(self, step, loss, forecast, band=None, samples=None, paths=None):
+        """Record one snapshot. Optional: band = (lower, upper) per point, samples = a few paths to draw,
+        paths = all sampled paths (then the test score is CRPS, otherwise RMSE of `forecast`).
+        The test score is shown in the monitor only and is never used for training."""
         f = np.asarray(forecast, dtype=float)
-        rmse = float(np.sqrt(np.mean((f - self.y_test) ** 2)))
+        if paths is not None:
+            score = float(crps(paths, self.y_test).mean())
+            self.data["score_name"] = "test CRPS"
+        else:
+            score = float(np.sqrt(np.mean((f - self.y_test) ** 2)))
         snap = {
             "step": int(step),
             "loss": float(loss) if np.isfinite(loss) else None,
-            "rmse": rmse if np.isfinite(rmse) else None,
+            "score": score if np.isfinite(score) else None,
             "forecast": _clean(f),
         }
         if band is not None:
@@ -47,7 +62,7 @@ class Monitor:
             snap["samples"] = [_clean(p) for p in samples]
         self.data["snapshots"].append(snap)
         self._write()
-        return rmse
+        return score
 
     def finish(self):
         self.data["done"] = True

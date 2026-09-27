@@ -1,6 +1,8 @@
 """Ensemble of decoder-only transformers, next-value prediction, forecast of an unseen range by sampling (like an LLM).
 
-Usage: python train.py <signal> [--raw]    (signal: sin | trend | amp; --raw turns off per-window normalization)
+Usage: python train.py <signal> [--raw] [--noise=STD]
+  signal: sin | trend | amp;  --raw turns off per-window normalization;  --noise adds Gaussian observation noise
+  to both training and test data (fixed seed). The forecast is scored against the noisy test values.
 
 Ensemble: `n_models` independent transformers (different random init), stored as one set of stacked weights so all
 of them train and forecast together in single batched GPU calls.
@@ -17,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from monitor import Monitor
+from monitor import Monitor, crps
 
 # ---- config ----
 SIGNALS = {
@@ -29,7 +31,8 @@ args = [a for a in sys.argv[1:] if not a.startswith("--")]
 signal_name = args[0] if args else "sin"
 signal = SIGNALS[signal_name]
 window_norm = "--raw" not in sys.argv
-name = signal_name + ("" if window_norm else "_raw")
+noise = float(next((a.split("=")[1] for a in sys.argv if a.startswith("--noise=")), 0))  # observation noise std
+name = signal_name + (f"_noise{noise:g}" if noise else "") + ("" if window_norm else "_raw")
 n, m = 24, 40          # train on [0, nπ), test on [nπ, (n+m)π]
 pts_per_pi = 20        # sampling: h = π/20, so one period = 40 points
 ctx = 40               # context window (one period)
@@ -48,7 +51,10 @@ dev = "cuda" if torch.cuda.is_available() else "cpu"
 h = math.pi / pts_per_pi
 x_train = np.arange(n * pts_per_pi) * h                           # [0, nπ)
 x_test = (n * pts_per_pi + np.arange(m * pts_per_pi + 1)) * h     # [nπ, (n+m)π]
-y_train, y_test = signal(x_train), signal(x_test)
+clean_test = signal(x_test)
+rng = np.random.default_rng(seed)
+y_train = signal(x_train) + noise * rng.standard_normal(len(x_train))
+y_test = clean_test + noise * rng.standard_normal(len(x_test))
 
 # Normalization uses training data only.
 mu, sd = y_train.mean(), y_train.std()
@@ -143,7 +149,7 @@ def forecast():
 
 
 # ---- train ----
-cfg = dict(signal=signal_name, window_norm=window_norm, n=n, m=m, pts_per_pi=pts_per_pi, ctx=ctx,
+cfg = dict(signal=signal_name, noise=noise, window_norm=window_norm, n=n, m=m, pts_per_pi=pts_per_pi, ctx=ctx,
            d_model=d_model, heads=heads, layers=layers, steps=steps, lr=lr, n_models=n_models, n_paths=n_paths,
            batch=batch, train_windows=len(X), params_per_model=sum(p.numel() for p in model.parameters()) // n_models)
 print(cfg)
@@ -157,9 +163,9 @@ for step in range(steps + 1):
         paths = forecast()
         with torch.no_grad():                         # one-step MSE on all windows: comparable to earlier runs
             mse = ((model(X.expand(n_models, -1, -1))[0] - Y) ** 2).mean().item()
-        rmse = mon.log(step, mse, np.median(paths, 0), band=np.percentile(paths, [2.5, 97.5], 0),
-                       samples=paths[::n_paths // n_models][:3])   # one path from each of 3 different models
-        print(f"step {step:5d}  nll {loss.item():+.3f}  one-step mse {mse:.2e}  test rmse {rmse:.4f}"
+        score = mon.log(step, mse, np.median(paths, 0), band=np.percentile(paths, [2.5, 97.5], 0),
+                        samples=paths[::n_paths // n_models][:3], paths=paths)  # samples: 1 path from each of 3 models
+        print(f"step {step:5d}  nll {loss.item():+.3f}  one-step mse {mse:.2e}  test crps {score:.4f}"
               f"  ({time.time() - t0:.0f}s)")
     if step == steps:
         break
@@ -169,16 +175,18 @@ for step in range(steps + 1):
     sched.step()
 mon.finish()
 
-# ---- final report ----
-paths = forecast()
+# ---- final report (same paths as the monitor's last snapshot) ----
 f = np.median(paths, 0)
 lo, hi = np.percentile(paths, [2.5, 97.5], 0)
 err = f - y_test
 inside = (y_test >= lo) & (y_test <= hi)
-print(f"\nFinal test RMSE (median path) {np.sqrt(np.mean(err ** 2)):.4f}   max |error| {np.abs(err).max():.4f}"
+cr = crps(paths, y_test)
+print(f"\nFinal test CRPS {cr.mean():.4f}   RMSE (median path) {np.sqrt(np.mean(err ** 2)):.4f}"
       f"   inside 95% band: {inside.mean():.0%}")
+if noise:
+    print(f"RMSE of median vs clean curve {np.sqrt(np.mean((f - clean_test) ** 2)):.4f}   (noise std {noise:g})")
 seg = 4  # per 4π-segment: does the error grow, and does the band grow with it?
 for k in range(0, m, seg):
     sl = slice(k * pts_per_pi, (k + seg) * pts_per_pi + 1)
-    print(f"  [{n + k}π, {n + k + seg}π]  RMSE {np.sqrt(np.mean(err[sl] ** 2)):.4f}"
+    print(f"  [{n + k}π, {n + k + seg}π]  CRPS {cr[sl].mean():.4f}   RMSE {np.sqrt(np.mean(err[sl] ** 2)):.4f}"
           f"   mean band width {(hi - lo)[sl].mean():.3f}   inside band {inside[sl].mean():.0%}")

@@ -34,6 +34,8 @@ const slider = document.getElementById("slider");
 const playBtn = document.getElementById("play");
 let data = null, idx = 0, follow = true, timer = null;
 const PI = Math.PI, byPi = a => a.map(v => v / PI);
+const score = q => q.score ?? q.rmse;                  // older run files stored "rmse"
+const scoreName = () => data.score_name || "test RMSE";
 
 async function poll() {
   try {
@@ -60,7 +62,7 @@ function draw() {
   const state = data.done ? '<span class="done">■ finished</span>' : '<span class="live">● live</span>';
   const fmt = v => v == null ? "—" : v.toExponential(3);
   document.getElementById("status").innerHTML = s
-    ? `<b>${data.name}</b> ${state} · snapshot ${idx + 1}/${snaps.length} · step <b>${s.step}</b> · train loss <b>${fmt(s.loss)}</b> · test RMSE <b>${fmt(s.rmse)}</b>`
+    ? `<b>${data.name}</b> ${state} · snapshot ${idx + 1}/${snaps.length} · step <b>${s.step}</b> · train loss <b>${fmt(s.loss)}</b> · ${scoreName()} <b>${fmt(score(s))}</b>`
     : `<b>${data.name}</b> ${state} · waiting for first snapshot…`;
   document.getElementById("stepLabel").textContent = s ? `step ${s.step}` : "";
   document.getElementById("config").textContent = JSON.stringify(data.config);
@@ -100,7 +102,7 @@ function draw() {
   const allSteps = snaps.map(q => q.step);
   Plotly.react("loss", [
     { x: steps, y: upTo.map(q => q.loss), name: "train loss (one-step MSE)", line: { color: "#1f77b4" } },
-    { x: steps, y: upTo.map(q => q.rmse), name: "test RMSE (display only)", line: { color: "#d62728", dash: "dot" } },
+    { x: steps, y: upTo.map(score), name: `${scoreName()} (display only)`, line: { color: "#d62728", dash: "dot" } },
   ], {
     margin: { t: 16, r: 16, b: 40, l: 56 },
     xaxis: { title: "step", range: allSteps.length ? [allSteps[0], allSteps[allSteps.length - 1]] : undefined },
