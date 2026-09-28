@@ -1,12 +1,8 @@
-run started 2026-09-27 22:50:11 UTC (push), cached data: none
-== no cached data: building it from Binance's archive
-ZRO          803 days 2024-06-20 .. 2026-08-31   funding 4813 (ZROUSDT)
-ZRX         2742 days 2019-02-28 .. 2026-08-31   funding 7644 (ZRXUSDT)
-ZRX          2208 hours
-== check: this runner reproduces the July 2026 backtest with the frozen models
-Jul 2026 maker 0.02%: this code -2.594277%   backtest -2.594277%   MATCH
-Jul 2026 taker 0.05%: this code -3.464277%   backtest -3.464277%   MATCH
+run started 2026-09-28 06:43:51 UTC (schedule), cached data: market-data-36356604089
 == update
-updated 223 coins (3 new: VTHO HYPE MARSCOIN); new days: 6745; latest daily candle: 2026-09-26 00:00
-== the paper test starts on 2026-09-28
-run finished 2026-09-27 23:05:35 UTC
+updated 223 coins (0 new: -); new days: 223; latest daily candle: 2026-09-27 00:00
+== step
+2026-09-28: long BNB SUI TRX   short ACE NEAR PEPE   (16.7% of capital each, at the 01:00 UTC close)
+coins today: ACE ADA ALLO BNB BTC DOGE ENA ETH LINK NEAR PEPE PUMP SOL SUI TRUMP TRX UNI XPL XRP ZEC
+log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
+run finished 2026-09-28 06:44:51 UTC
