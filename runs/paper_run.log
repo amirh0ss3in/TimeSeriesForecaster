@@ -1,8 +1,8 @@
-run started 2026-09-28 06:43:51 UTC (schedule), cached data: market-data-36356604089
+run started 2026-09-28 13:08:36 UTC (workflow_dispatch), cached data: market-data-36387892998
 == update
-updated 223 coins (0 new: -); new days: 223; latest daily candle: 2026-09-27 00:00
+updated 224 coins (1 new: POL); new days: 745; latest daily candle: 2026-09-27 00:00
 == step
 2026-09-28: long BNB SUI TRX   short ACE NEAR PEPE   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ACE ADA ALLO BNB BTC DOGE ENA ETH LINK NEAR PEPE PUMP SOL SUI TRUMP TRX UNI XPL XRP ZEC
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-09-28 06:44:51 UTC
+run finished 2026-09-28 13:09:34 UTC
