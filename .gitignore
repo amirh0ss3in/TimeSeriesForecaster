@@ -10,4 +10,4 @@ external/
 data/universe/
 data/universe_funding/
 data/universe_1h/
-cards/
+runs/rank_check.json

@@ -4,26 +4,24 @@ market's direction cancels). Retrained at the start of every month on all earlie
 prediction is out of sample. Positions are the average of the last H days' portfolios (overlapping holdings).
 Positions pay (long) or receive (short) each coin's perpetual funding rate.
 
-Usage: python crypto_rank.py [--save=rank] [--universe=20] [--drop=ZEC,TAO] [--delay=1]
-                             [--walk-from=2024-01-01] [--nested-from=2025-01] [--seeds=5]
-  --universe=N: point-in-time coins (fetch_universe.py): at the start of every month, the N coins with the highest
-      USDT volume over the previous 30 days, among coins with 90+ days of history and a live perpetual. Without it:
-      the 20 coins in data/crypto/ (today's largest, so chosen with hindsight).
+Usage: python crypto_rank.py [--save=rank] [--universe=20] [--delay=1] [--seeds=5]
+                             [--walk-from=2024-01-01] [--nested-from=2025-01]
+  --universe=N: the coins (fetch_universe.py): at the start of every month, the N with the highest USDT volume over
+      the previous 30 days, among coins with 90+ days of history and a live perpetual.
+  --delay=N: trade at the close N hours after the decision (hourly closes, data/universe_1h/).
   --seeds=N: average N LightGBM models with different random row/input sampling (one model's picks vary a lot).
-  --drop: leave these coins out entirely.
-  --delay=N: trade at the close N hours after the decision (hourly closes; data/universe_1h/ with --universe).
 Honest test: each month's (H, K) is chosen from earlier months only; flat if none was positive.
 Also prints each coin's share of the out-of-sample profit. The functions are shared with rank_trader.py.
 """
 import glob
+import json
 import os
 import sys
+import time
 
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-
-from monitor import write_json
 
 FEES = {"maker 0.02%": 0.0002, "taker 0.05%": 0.0005}
 HS, KS = [1, 3, 7], [3, 5]
@@ -32,20 +30,32 @@ PARAMS = dict(n_estimators=300, learning_rate=0.02, num_leaves=15, min_child_sam
               subsample_freq=1, colsample_bytree=0.5, reg_lambda=10, verbose=-1)
 
 
-def load(univ, drop=(), delay=0, end=END):
+def write_json(path, data):
+    """Write to a temp file, then swap it in, so a page never reads a half-written file."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    for _ in range(50):                                        # on Windows the swap fails while a server reads it
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.02)
+
+
+def load(univ, delay=0, end=END):
     """Everything known at each day's 00:00 UTC decision time.
 
     Returns f (one row per tradable coin and day, with the inputs and their cross-sectional versions), the input
     names, px (close at decision time), ret1 (log move from this decision's trade price to the next one's) and fund
     (funding paid by a long position between them), each a (day x coin) table.
     """
-    src, fsrc, hsrc = ("data/universe", "data/universe_funding", "data/universe_1h") if univ else \
-        ("data/crypto", "data/crypto_funding", "data/crypto")
+    src, fsrc, hsrc = "data/universe", "data/universe_funding", "data/universe_1h"
     close, qvol, execp, feats = {}, {}, {}, []
     for path in sorted(glob.glob(f"{src}/*.csv.gz")):
         c = os.path.basename(path).split(".")[0]
         h = pd.read_csv(path, parse_dates=["time"]).set_index("time")
-        if c in drop or h.empty:
+        if h.empty:
             continue
         d = h.resample("1D").agg({"open": "first", "high": "max", "low": "min", "close": "last", "quote_volume": "sum",
                                   "volume": "sum", "taker_buy_volume": "sum", "trades": "sum"})
@@ -93,21 +103,18 @@ def load(univ, drop=(), delay=0, end=END):
     ft = ft.reindex(columns=px.columns)
     fund = ft.groupby((ft.index - pd.Timedelta(1, "ns")).floor("D")).sum().reindex(px.index).fillna(0.0)  # (t, t+1d]
 
-    # Tradable coins per day.
-    if univ:
-        live = ft.notna().groupby(ft.index.floor("D")).sum().reindex(px.index, fill_value=0)
-        live = live.rolling(30, min_periods=1).sum().shift(1) > 0            # a funding payment in the last 30 days
-        hist = px.notna().cumsum()
-        mem = pd.DataFrame(False, index=px.index, columns=px.columns)
-        for m in pd.period_range(px.index[0], end, freq="M"):
-            a = m.start_time
-            if a not in px.index:
-                continue
-            vol30 = qv[(qv.index > a - pd.Timedelta(days=30)) & (qv.index <= a)].mean()
-            top = vol30[(hist.loc[a] >= 90) & live.loc[a] & vol30.notna()].nlargest(univ).index
-            mem.loc[(mem.index >= a) & (mem.index < (m + 1).start_time), top] = True
-    else:
-        mem = px.notna()
+    # Tradable coins per month: the univ most traded, with 90+ days of history and a live perpetual.
+    live = ft.notna().groupby(ft.index.floor("D")).sum().reindex(px.index, fill_value=0)
+    live = live.rolling(30, min_periods=1).sum().shift(1) > 0                # a funding payment in the last 30 days
+    hist = px.notna().cumsum()
+    mem = pd.DataFrame(False, index=px.index, columns=px.columns)
+    for m in pd.period_range(px.index[0], end, freq="M"):
+        a = m.start_time
+        if a not in px.index:
+            continue
+        vol30 = qv[(qv.index > a - pd.Timedelta(days=30)) & (qv.index <= a)].mean()
+        top = vol30[(hist.loc[a] >= 90) & live.loc[a] & vol30.notna()].nlargest(univ).index
+        mem.loc[(mem.index >= a) & (mem.index < (m + 1).start_time), top] = True
     mem = mem.rename_axis("time").rename_axis("coin", axis=1).stack().rename("in").reset_index()
     f = f.merge(mem, on=["time", "coin"])
     f = f[f["in"]].drop(columns="in")
@@ -167,17 +174,15 @@ def pnl(w, ret1, fund):
 
 if __name__ == "__main__":
     opt = lambda k, d: next((a.split("=", 1)[1] for a in sys.argv if a.startswith(f"--{k}=")), d)
-    save, drop, delay, univ = opt("save", "rank"), [c for c in opt("drop", "").split(",") if c], \
-        int(opt("delay", 0)), int(opt("universe", 0))
+    save, delay, univ = opt("save", "rank"), int(opt("delay", 0)), int(opt("universe", 20))
     walk_from, nested_from = pd.Timestamp(opt("walk-from", "2024-01-01")), pd.Period(opt("nested-from", "2025-01"), "M")
     seeds = int(opt("seeds", 5))
 
-    f, inputs, px, ret1, fund = load(univ, drop, delay)
-    if univ:
-        first = f.groupby(f["time"].dt.to_period("M"))["coin"].unique()
-        print(f"universe: {f['coin'].nunique()} different coins over time; e.g. " +
-              "  ".join(f"{m}: {' '.join(sorted(first[pd.Period(m, 'M')]))}" for m in ("2021-01", "2023-01", "2026-08")
-                        if pd.Period(m, "M") in first.index), flush=True)
+    f, inputs, px, ret1, fund = load(univ, delay)
+    first = f.groupby(f["time"].dt.to_period("M"))["coin"].unique()
+    print(f"universe: {f['coin'].nunique()} different coins over time; e.g. " +
+          "  ".join(f"{m}: {' '.join(sorted(first[pd.Period(m, 'M')]))}" for m in ("2021-01", "2023-01", "2026-08")
+                    if pd.Period(m, "M") in first.index), flush=True)
 
     scores = {H: walk(targets(f, px, H), inputs, H, walk_from, END, seeds) for H in HS}
     daily, coin_pnl = {}, {}

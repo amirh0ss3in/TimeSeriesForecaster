@@ -34,9 +34,8 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from crypto_rank import FEES, fit, load, pnl, positions, targets
+from crypto_rank import FEES, fit, load, pnl, positions, targets, write_json
 from fetch_universe import NOT_COINS
-from monitor import write_json
 
 UNIVERSE, H, K, SEEDS, DELAY = 20, 1, 3, 5, 1
 MODEL_DIR = "checkpoints/rank_trader"

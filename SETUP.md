@@ -1,9 +1,19 @@
-# Daily crypto ranking: current setup
+# Daily crypto ranking
 
-Every day at 00:00 UTC, a LightGBM model ranks the 20 most-traded coins by their expected return over the next day
-relative to the coin average. The system buys the top 3 and shorts the bottom 3 on perpetual futures, half the capital
-on each side, so the market's overall direction cancels out. The coin list is rebuilt every month from what was
-known at the time, and every result below is out of sample, including the choice of settings.
+Every day at 00:00 UTC, a LightGBM model ranks the 20 most-traded coins by how much each should beat or trail the
+average of the 20 over the next day. The system buys the top 3 and shorts the bottom 3 on perpetual futures, half the
+capital on each side, so the market's overall direction mostly cancels out. The coin list is rebuilt every month from
+what was known at the time, and every result below is out of sample, including the choice of settings.
+
+| File | Role |
+|---|---|
+| `fetch_universe.py` | Downloads daily candles, funding and hourly closes for every coin ever in the top 40 by volume |
+| `crypto_rank.py` | The model and the backtest (shared functions) |
+| `rank_trader.py` | The frozen paper trader: `update`, `step`, `check`, `replay` |
+| `telegram_post.py` | Posts each day's decision to Telegram |
+| `.github/workflows/paper-trader.yml` | Runs the paper trader daily on GitHub Actions |
+| `backtest.html`, `serve.py` | Result pages at http://localhost:8000 |
+| `archive/` | Earlier experiments (see *How we got here*) |
 
 ## Results (Jan 2022 – Aug 2026, 56 months, net of fees and funding, no leverage)
 
@@ -17,11 +27,10 @@ known at the time, and every result below is out of sample, including the choice
   2024 +2.1%, 2025 +4.7%, 2026 (Jan–Aug) +2.7% a month. 2026 is the weakest year so far.
 - **The goal is more than 2% net a month.** The average clears it at every delay and fee level; the lower end of the
   range with a 1-hour delay and taker fees (+1.5%) doesn't.
-- **Profit is spread across many coins** (best: RUNE, NEAR, WAVES, ENA, BONK, ZIL; worst: WIF, FTM, OP, DOT, BOME).
-- **With today's 20 largest coins instead** (chosen with hindsight), the result is similar: +5.6% a month (maker,
-  no delay).
+- **Where it loses:** market rallies (the shorted coins are more volatile and rise more), short squeezes (a shorted
+  coin up 20–45% in a day), crashes of the longs, and fees of about 1.7% a month.
 - **Not modelled:** slippage on the smaller coins in the list, and the gap between the spot prices used here and
-  the futures prices actually traded. Paper trading measures both.
+  the futures prices actually traded.
 
 ## How it works (`crypto_rank.py`)
 
@@ -43,87 +52,51 @@ known at the time, and every result below is out of sample, including the choice
 - **Costs:** fees on every change in a coin's weight; each position pays (long) or receives (short) its coin's
   funding rate. A position earns weight × the coin's simple move.
 
-## Data
-
 ```bash
-python fetch_universe.py            # daily candles + funding for 268 coins ever in the top 40 by volume -> data/universe*/
-python fetch_universe.py --hourly   # hourly closes for them, for the trade-delay test -> data/universe_1h/
-python fetch_crypto.py              # hourly candles for today's 20 largest coins -> data/crypto/ (see below)
+python fetch_universe.py                    # daily candles + funding -> data/universe/, data/universe_funding/
+python fetch_universe.py --hourly           # hourly closes (fill prices) -> data/universe_1h/
+python crypto_rank.py --delay=1 --walk-from=2021-01-01 --nested-from=2022-01 --save=rank_pit20_d1
+python serve.py                             # then http://localhost:8000/backtest.html?run=rank_pit20_d1
 ```
 
-All data folders, `checkpoints/` and `external/` are git-ignored.
-
-## How to run
-
-```bash
-python serve.py                                             # pages at http://localhost:8000 (no caching)
-python crypto_rank.py --universe=20 --delay=1 --walk-from=2021-01-01 --nested-from=2022-01 --save=rank_pit20_d1
-python crypto_rank.py --walk-from=2021-01-01 --nested-from=2022-01 --save=rank20_s5    # today's 20 coins instead
-```
-
-| Page | Shows |
-|---|---|
-| `backtest.html?run=rank_pit20_d1` | monthly returns against the goal, gain over time, the setting chosen each month |
+Data folders and `checkpoints/` (except the frozen models) are git-ignored.
 
 ## Paper trading (`rank_trader.py`, frozen)
 
-The frozen system uses the setting the honest test chose every month since mid-2025: the point-in-time top 20, hold
-1 day, long the top 3 and short the bottom 3 (16.7% of capital each), filled at the 01:00 UTC close. It imports the
-same functions as `crypto_rank.py`, and each month's models are trained once and saved in `checkpoints/rank_trader/`.
+The frozen system uses the setting the honest test chose every month since mid-2025: hold 1 day, long the top 3 and
+short the bottom 3 (16.7% of capital each), filled at the 01:00 UTC close. It uses the same functions as
+`crypto_rank.py`; each month's models are trained once on the 1st and saved in `checkpoints/rank_trader/`.
 
 ```bash
 python rank_trader.py update     # latest candles, hourly closes and funding from Binance's public API
-python rank_trader.py step       # today's decision (after 00:00 UTC); books earlier days -> runs/rank_paper.json
+python rank_trader.py step       # decide every day not logged yet; book earlier days -> runs/rank_paper.json
 python rank_trader.py check      # replays Jul 2026 and compares it with the backtest
 python rank_trader.py replay --from=2026-09-01 --to=2026-09-26 --log=rank_replay_sep
 ```
 
-**The paper test runs on GitHub Actions** (`.github/workflows/paper-trader.yml`), starting with the decision for
-2026-09-28:
-- **Schedule:** it runs every day at 01:05 UTC (GitHub may start it a little late).
-- **Data:** it runs `update`, then `step`. `step` decides every day not logged yet, so a missed run is caught up
-  the next day, and days already logged are never recomputed.
-- **Commits:** it commits `runs/rank_paper.json` (the log), `runs/paper_run.log` (the last run's output) and each
-  new month's frozen models to `main`. Run `git pull` before viewing them or changing anything.
-- **Addresses:** GitHub's servers are in the US, where api.binance.com and fapi.binance.com refuse connections. The
-  workflow therefore reads the same data from data-api.binance.vision and www.binance.com (`BINANCE_SPOT`,
-  `BINANCE_FUTURES`).
-- **Telegram:** each new decision, with the latest booked result and the running total, is posted to a Telegram
-  channel by `telegram_post.py`, once the repository secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` exist.
-  Preview the message with `python telegram_post.py --dry-run`.
-- **Instagram:** each new decision is also posted as a 1080×1350 image card (`social_card.py`) with a caption, by
-  `instagram_post.py`. Instagram only publishes images from a public address, so the card is first committed to the
-  public repository `PUBLIC_REPO` (cards/<date>.jpg). Secrets:
-  - `INSTAGRAM_TOKEN`: a long-lived Instagram token (Instagram API with Instagram Login).
-  - `PUBLISH_TOKEN`: a fine-grained GitHub token with Contents write on the public repository and Secrets write on
-    this one. The Instagram token lasts 60 days, so it is renewed on the 1st and 15th of each month and saved back
-    into `INSTAGRAM_TOKEN`.
-
-  Preview with `python instagram_post.py --dry-run`.
-- **Cache:** market data is kept in the Actions cache. If the cache is gone (e.g. evicted after 7 days unused), the
+**It runs on GitHub Actions** (`.github/workflows/paper-trader.yml`), starting with the decision for 2026-09-28:
+- **Schedule:** daily at 01:05 UTC. GitHub often starts it hours late, which doesn't change the result, because the
+  fill is always the 01:00 close.
+- **Steps:** `update`, then `step`, which decides every day not logged yet (a missed run is caught up) and never
+  recomputes logged days. It then posts the new day to Telegram (`telegram_post.py`, secrets `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_CHAT_ID`; preview with `python telegram_post.py --dry-run`).
+- **Commits:** `runs/rank_paper.json` (the log), `runs/paper_run.log` (the last run's output),
+  `runs/telegram_posted.txt` and each new month's models, to `main`. Run `git pull` before viewing or changing anything.
+- **Addresses:** GitHub's US servers are refused by api.binance.com and fapi.binance.com, so the workflow reads the
+  same data from data-api.binance.vision and www.binance.com (`BINANCE_SPOT`, `BINANCE_FUTURES`).
+- **Cache:** market data is kept in the Actions cache. If the cache is gone (evicted after 7 days unused), the
   workflow rebuilds it from Binance's archive and first reruns `check`.
-
-Each decision uses only data from before that day's 00:00 UTC, and the paper fill is the 01:00 close, so the same
-log can also be produced on the laptop (`update`, then `step --from=2026-09-28`). Don't run both, or the two logs
-will diverge. The log is at `backtest.html?run=rank_paper`: daily positions, net per day with maker and taker fees,
-and gain over time.
+- **Manual run:** push a change to `.github/run-now`, or press "Run workflow" in the Actions tab.
 
 Checks passed:
-- `check`: the frozen code reproduces the backtest's July 2026 result exactly (−2.59% maker, −3.46% taker).
+- `check` reproduces the backtest's July 2026 result exactly (−2.59% maker, −3.46% taker), on the laptop and on
+  GitHub's runner.
 - **September 2026 (never used by the ranking work), Sept 1–26:** +14.9% with maker fees, +14.1% with taker fees,
-  18 of 26 days positive (`backtest.html?run=rank_replay_sep`). One month is a small sample; the backtest's months
-  range from about −10% to +20%.
-- `update` keeps archive rows as they are and only appends new days. A coin not on disk is added once it is in the
-  top 40 by 24-hour volume.
+  18 of 26 days positive (`backtest.html?run=rank_replay_sep`).
+- Re-deciding the live days locally gives the same positions and scores as the logged ones.
 
-Judge the paper test after a few months against the 2% goal, with taker fees, without changing anything.
-
-## The hourly direction pipeline (earlier, still in the root)
-
-`crypto_features.py`, `crypto_probe.py`, `crypto_backtest.py`, `crypto_nested.py` and `leak_check.py` predict each
-coin's next hour from 46 inputs (candle shape, order flow, the last minutes of the hour). The edge is real but thin
-(52.9% of hours right, Jan 2024 – Aug 2026) and shrinking, and trading it hourly lost 0.7% a month once the
-settings were also chosen out of sample (`backtest.html?run=nested`, `direction.html?run=lgbm_w24`).
+The log is at `backtest.html?run=rank_paper`. Judge the paper test after a few months against the 2% goal, with taker
+fees, without changing anything.
 
 ## How we got here (details in `archive/README.md`)
 

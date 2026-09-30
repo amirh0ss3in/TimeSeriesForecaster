@@ -16,15 +16,22 @@ The findings are summarized in `../SETUP.md` under *How we got here*.
 | `crypto_diagnose.py` | Diagnostics for that system: sizing and costs, profit by coin and month, neighbouring thresholds |
 | `kronos_test.py` | Zero-shot Kronos-small (80-hour context, 10 samples) on next-hour direction: 50.2% hit on Jul 2025 – Aug 2026 (after its weights were uploaded) against 53.3% for LightGBM on the same hours. Needs the repo cloned to `../external/Kronos` |
 | `chronos_test.py` | Same test for Chronos-Bolt; never run (replaced by Kronos) |
+| `fetch_crypto.py`, `crypto_features.py`, `leak_check.py` | Hourly candles (spot, 5m, perp, premium, funding) for today's 20 largest coins, the 55-input hourly feature table, and its truncation leak test |
+| `crypto_probe.py`, `crypto_eval.py` | LightGBM next-hour direction model (52.9% of hours right, Jan 2024 – Aug 2026) and its scoring |
+| `crypto_backtest.py`, `crypto_nested.py` | Hourly trading backtest (entry/exit thresholds, allocations, fees, funding) and its honest month-by-month test (−0.7% a month) |
+| `direction.html` | Direction-accuracy page (`?run=lgbm_w24`) |
+| `monitor.py` | Shared helpers for the scripts above (`Monitor`, `crps`, `write_json`) |
+| `runs/rank20_s5.json` | Daily ranking with today's 20 largest coins (chosen with hindsight): +5.6% a month (maker, no delay) |
 | `data/` | Sunspot and CO₂ series used by `train.py` |
 | `runs/` | Their result files |
 
-**Running an archived script.** Run it from the repository root so that the root modules (`crypto_features.py`,
-`crypto_eval.py`, `crypto_backtest.py`, `monitor.py`) and `data/` are found:
+**Running an archived script.** Run it from the repository root, so the data folders are found. The archived modules
+it imports sit next to it:
 
 ```bash
-PYTHONPATH=. python archive/train.py amp
+python archive/train.py amp
 ```
 
 New results are written to the root `runs/` folder. The archived pages read `archive/runs/`, so move a new result
-file there to view it at `http://localhost:8000/archive/monitor.html?run=NAME`.
+file there to view it at `http://localhost:8000/archive/monitor.html?run=NAME` (or `archive/direction.html`). An
+archived backtest result can be opened with the root page as `backtest.html?run=../archive/runs/nested`.
