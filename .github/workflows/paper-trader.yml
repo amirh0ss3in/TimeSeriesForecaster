@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [".github/workflows/paper-trader.yml", "telegram_post.py"]
+    paths: [".github/workflows/paper-trader.yml", "telegram_post.py", ".github/run-now"]
 concurrency:
   group: paper-trader
 permissions:
