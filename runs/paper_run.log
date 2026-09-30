@@ -1,10 +1,10 @@
-run started 2026-09-29 06:49:15 UTC (schedule), cached data: market-data-36426470630
+run started 2026-09-30 06:37:50 UTC (schedule), cached data: market-data-36533077708
 == update
-updated 226 coins (2 new: NMR MUBARAK); new days: 1774; latest daily candle: 2026-09-28 00:00
+updated 226 coins (0 new: -); new days: 226; latest daily candle: 2026-09-29 00:00
 == step
-2026-09-29: long BTC PUMP SUI   short ACE NEAR PEPE   (16.7% of capital each, at the 01:00 UTC close)
+2026-09-30: long NEAR SUI TRX   short PEPE PUMP UNI   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ACE ADA ALLO BNB BTC DOGE ENA ETH LINK NEAR PEPE PUMP SOL SUI TRUMP TRX UNI XPL XRP ZEC
-booked maker 0.02%: 1 days, last 2026-09-28 +1.39%, total +1.39%
-booked taker 0.05%: 1 days, last 2026-09-28 +1.36%, total +1.36%
+booked maker 0.02%: 2 days, last 2026-09-29 +2.35%, total +3.74%
+booked taker 0.05%: 2 days, last 2026-09-29 +2.33%, total +3.69%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-09-29 06:50:25 UTC
+run finished 2026-09-30 06:39:10 UTC
