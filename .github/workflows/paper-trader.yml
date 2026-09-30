@@ -1,14 +1,15 @@
 name: paper-trader
 # Daily paper trading of the frozen ranking system (rank_trader.py), at 01:05 UTC: fetch the latest data, decide every
 # day not logged yet, book earlier days. Market data lives in the Actions cache (rebuilt from Binance's archive if the
-# cache is gone); the paper log, the run log and each month's frozen models are committed back to main.
+# cache is gone); the paper log, the run log and each month's frozen models are committed back to main. Each new
+# decision is posted to Telegram when the TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID repository secrets are set.
 on:
   schedule:
     - cron: "5 1 * * *"
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [".github/workflows/paper-trader.yml"]
+    paths: [".github/workflows/paper-trader.yml", "telegram_post.py"]
 concurrency:
   group: paper-trader
 permissions:
@@ -57,6 +58,11 @@ jobs:
             fi
             echo "run finished $(date -u '+%F %T') UTC"
           } 2>&1 | tee runs/paper_run.log
+      - name: Post to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python telegram_post.py 2>&1 | tee -a runs/paper_run.log
       - name: Save market data
         if: always() && hashFiles('data/universe/BTC.csv.gz') != ''
         uses: actions/cache/save@v4
@@ -69,7 +75,7 @@ jobs:
           git config user.name github-actions
           git config user.email github-actions@users.noreply.github.com
           git add runs/paper_run.log checkpoints/rank_trader
-          if [ -f runs/rank_paper.json ]; then git add runs/rank_paper.json; fi
+          for f in runs/rank_paper.json runs/telegram_posted.txt; do if [ -f $f ]; then git add $f; fi; done
           if git diff --cached --quiet; then exit 0; fi
           git commit -q -m "Paper trading $(date -u +%F)"
           git pull -q --rebase --autostash && git push -q

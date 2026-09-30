@@ -88,6 +88,9 @@ python rank_trader.py replay --from=2026-09-01 --to=2026-09-26 --log=rank_replay
 - **Addresses:** GitHub's servers are in the US, where api.binance.com and fapi.binance.com refuse connections. The
   workflow therefore reads the same data from data-api.binance.vision and www.binance.com (`BINANCE_SPOT`,
   `BINANCE_FUTURES`).
+- **Telegram:** each new decision, with the latest booked result and the running total, is posted to a Telegram
+  channel by `telegram_post.py`, once the repository secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` exist.
+  Preview the message with `python telegram_post.py --dry-run`.
 - **Cache:** market data is kept in the Actions cache. If the cache is gone (e.g. evicted after 7 days unused), the
   workflow rebuilds it from Binance's archive and first reruns `check`.
 
