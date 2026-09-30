@@ -33,5 +33,6 @@ python archive/train.py amp
 ```
 
 New results are written to the root `runs/` folder. The archived pages read `archive/runs/`, so move a new result
-file there to view it at `http://localhost:8000/archive/monitor.html?run=NAME` (or `archive/direction.html`). An
-archived backtest result can be opened with the root page as `backtest.html?run=../archive/runs/nested`.
+file there. `serve.py` only serves the current results, so view archived pages with a plain server from the root,
+`python -m http.server 8001`, then e.g. `http://localhost:8001/archive/monitor.html?run=NAME` or
+`archive/direction.html?run=lgbm_w24`.

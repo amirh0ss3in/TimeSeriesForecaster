@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "monitor",
+      "name": "results",
       "runtimeExecutable": "python",
       "runtimeArgs": ["serve.py"],
       "port": 8000
