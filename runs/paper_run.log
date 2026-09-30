@@ -1,4 +1,4 @@
-run started 2026-09-30 10:29:30 UTC (push), cached data: market-data-36699819803
+run started 2026-09-30 13:54:56 UTC (push), cached data: market-data-36702714583
 == update
 updated 227 coins (0 new: -); new days: 0; latest daily candle: 2026-09-29 00:00
 == step
@@ -7,6 +7,5 @@ coins today: ACE ADA ALLO BNB BTC DOGE ENA ETH LINK NEAR PEPE PUMP SOL SUI TRUMP
 booked maker 0.02%: 2 days, last 2026-09-29 +2.35%, total +3.74%
 booked taker 0.05%: 2 days, last 2026-09-29 +2.33%, total +3.69%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-09-30 10:30:38 UTC
+run finished 2026-09-30 13:56:15 UTC
 telegram: nothing new since 2026-09-30
-instagram: INSTAGRAM_TOKEN / PUBLISH_TOKEN / PUBLIC_REPO not set, nothing posted
