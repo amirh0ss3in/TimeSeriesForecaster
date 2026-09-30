@@ -2,14 +2,16 @@ name: paper-trader
 # Daily paper trading of the frozen ranking system (rank_trader.py), at 01:05 UTC: fetch the latest data, decide every
 # day not logged yet, book earlier days. Market data lives in the Actions cache (rebuilt from Binance's archive if the
 # cache is gone); the paper log, the run log and each month's frozen models are committed back to main. Each new
-# decision is posted to Telegram when the TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID repository secrets are set.
+# decision is posted to Telegram when the TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID repository secrets are set, and to
+# Instagram as an image card when INSTAGRAM_TOKEN and PUBLISH_TOKEN are set (the card is hosted in PUBLIC_REPO).
 on:
   schedule:
     - cron: "5 1 * * *"
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [".github/workflows/paper-trader.yml", "telegram_post.py", ".github/run-now"]
+    paths: [".github/workflows/paper-trader.yml", "telegram_post.py", "instagram_post.py", "social_card.py",
+            ".github/run-now"]
 concurrency:
   group: paper-trader
 permissions:
@@ -18,6 +20,7 @@ env:
   BINANCE_SPOT: https://data-api.binance.vision   # api.binance.com and fapi.binance.com refuse GitHub's US servers
   BINANCE_FUTURES: https://www.binance.com
   PAPER_FROM: "2026-09-28"
+  PUBLIC_REPO: amirh0ss3in/crypto-rank-radar       # public repository that hosts the Instagram cards
 jobs:
   paper:
     runs-on: ubuntu-24.04
@@ -28,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install packages
-        run: pip install -q uv && uv pip install --system numpy==2.4.3 pandas==2.3.3 lightgbm==4.7.0
+        run: pip install -q uv && uv pip install --system numpy==2.4.3 pandas==2.3.3 lightgbm==4.7.0 matplotlib==3.10.7 pynacl==1.6.2
       - name: Restore market data
         id: cache
         uses: actions/cache/restore@v4
@@ -63,6 +66,11 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python telegram_post.py 2>&1 | tee -a runs/paper_run.log
+      - name: Post to Instagram
+        env:
+          INSTAGRAM_TOKEN: ${{ secrets.INSTAGRAM_TOKEN }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: python -W ignore instagram_post.py 2>&1 | tee -a runs/paper_run.log
       - name: Save market data
         if: always() && hashFiles('data/universe/BTC.csv.gz') != ''
         uses: actions/cache/save@v4
@@ -75,7 +83,7 @@ jobs:
           git config user.name github-actions
           git config user.email github-actions@users.noreply.github.com
           git add runs/paper_run.log checkpoints/rank_trader
-          for f in runs/rank_paper.json runs/telegram_posted.txt; do if [ -f $f ]; then git add $f; fi; done
+          for f in runs/rank_paper.json runs/telegram_posted.txt runs/instagram_posted.txt; do if [ -f $f ]; then git add $f; fi; done
           if git diff --cached --quiet; then exit 0; fi
           git commit -q -m "Paper trading $(date -u +%F)"
           git pull -q --rebase --autostash && git push -q

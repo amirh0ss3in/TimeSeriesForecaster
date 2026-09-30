@@ -91,6 +91,15 @@ python rank_trader.py replay --from=2026-09-01 --to=2026-09-26 --log=rank_replay
 - **Telegram:** each new decision, with the latest booked result and the running total, is posted to a Telegram
   channel by `telegram_post.py`, once the repository secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` exist.
   Preview the message with `python telegram_post.py --dry-run`.
+- **Instagram:** each new decision is also posted as a 1080×1350 image card (`social_card.py`) with a caption, by
+  `instagram_post.py`. Instagram only publishes images from a public address, so the card is first committed to the
+  public repository `PUBLIC_REPO` (cards/<date>.jpg). Secrets:
+  - `INSTAGRAM_TOKEN`: a long-lived Instagram token (Instagram API with Instagram Login).
+  - `PUBLISH_TOKEN`: a fine-grained GitHub token with Contents write on the public repository and Secrets write on
+    this one. The Instagram token lasts 60 days, so it is renewed on the 1st and 15th of each month and saved back
+    into `INSTAGRAM_TOKEN`.
+
+  Preview with `python instagram_post.py --dry-run`.
 - **Cache:** market data is kept in the Actions cache. If the cache is gone (e.g. evicted after 7 days unused), the
   workflow rebuilds it from Binance's archive and first reruns `check`.
 
