@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install packages
-        run: pip install -q uv && uv pip install --system numpy==2.4.3 pandas==2.3.3 lightgbm==4.7.0
+        run: pip install -q uv && uv pip install --system numpy==2.4.3 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.7.2   # sklearn: monthly model training
       - name: Restore market data
         id: cache
         uses: actions/cache/restore@v4
