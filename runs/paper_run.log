@@ -1,4 +1,4 @@
-run started 2026-10-01 08:27:05 UTC (push), cached data: market-data-36828636728
+run started 2026-10-01 08:33:43 UTC (push), cached data: market-data-36836346819
 == update
 updated 227 coins (0 new: -); new days: 0; latest daily candle: 2026-09-30 00:00
 == step
@@ -7,5 +7,5 @@ coins today: ADA ARB AVAX BNB BTC DOGE ENA ETH LINK LTC NEAR PEPE PUMP SOL SUI T
 booked maker 0.02%: 3 days, last 2026-09-30 +1.42%, total +5.16%
 booked taker 0.05%: 3 days, last 2026-09-30 +1.38%, total +5.07%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-10-01 08:28:32 UTC
-telegram: posted 2026-10-01
+run finished 2026-10-01 08:34:53 UTC
+telegram: nothing new since 2026-10-01
