@@ -29,18 +29,20 @@ if not dry and (not days or days[-1]["date"] <= posted):
 
 today, booked = days[-1], [r for r in days if r["taker"] is not None]
 pc = lambda v: f"{100 * v:+.2f}%"
-lines = [f"<b>Crypto ranking, {today['date']}</b>",
-         f"Long: {' · '.join(today['long'])}",
-         f"Short: {' · '.join(today['short'])}",
-         f"<i>16.7% of capital each, from data up to 00:00 UTC, filled at the 01:00 UTC close, held 1 day</i>"]
+day = lambda s, n=0: (lambda d: f"{d.day} {d:%b}")(dt.date.fromisoformat(s) + dt.timedelta(days=n))
+lines = [f"<b>Holding now: {day(today['date'])} 01:00 → {day(today['date'], 1)} 01:00 UTC</b>",
+         f"LONG: {' · '.join(today['long'])}",
+         f"SHORT: {' · '.join(today['short'])}",
+         "<i>Each 1/6 of capital, opened at the 01:00 UTC price, rebalanced daily.</i>"]
 if booked:
-    month = today["date"][:7]
+    last, month = booked[-1], today["date"][:7]
     mtd = [r["taker"] for r in booked if r["date"].startswith(month)]
     lines += ["",
-              f"{booked[-1]['date']}: <b>{pc(booked[-1]['taker'])}</b>",
-              f"Since {log['start']}: {pc(sum(r['taker'] for r in booked))} over {len(booked)} days"
-              + (f" · {month}: {pc(sum(mtd))}" if mtd and len(mtd) < len(booked) else ""),
-              f"<i>Net of taker fees (0.05%) and funding. Paper trading, no real money.</i>"]
+              f"Result of {day(last['date'])} (long {' '.join(last['long'])}, short {' '.join(last['short'])}): "
+              f"<b>{pc(last['taker'])}</b>",
+              f"Total since {day(log['start'])}: {pc(sum(r['taker'] for r in booked))} over {len(booked)} days"
+              + (f" · this month: {pc(sum(mtd))}" if mtd and len(mtd) < len(booked) else ""),
+              "<i>Net of fees and funding. Paper trading, no real money.</i>"]
 lines.append(f"<i>Posted {dt.datetime.now(dt.UTC):%Y-%m-%d %H:%M} UTC</i>")
 if dry:
     print("\n".join(lines))
