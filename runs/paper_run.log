@@ -1,11 +1,22 @@
-run started 2026-09-30 13:54:56 UTC (push), cached data: market-data-36702714583
+run started 2026-10-01 07:15:42 UTC (schedule), cached data: market-data-36725117999
 == update
-updated 227 coins (0 new: -); new days: 0; latest daily candle: 2026-09-29 00:00
+updated 227 coins (0 new: -); new days: 227; latest daily candle: 2026-09-30 00:00
 == step
-2026-09-30: long NEAR SUI TRX   short PEPE PUMP UNI   (16.7% of capital each, at the 01:00 UTC close)
-coins today: ACE ADA ALLO BNB BTC DOGE ENA ETH LINK NEAR PEPE PUMP SOL SUI TRUMP TRX UNI XPL XRP ZEC
-booked maker 0.02%: 2 days, last 2026-09-29 +2.35%, total +3.74%
-booked taker 0.05%: 2 days, last 2026-09-29 +2.33%, total +3.69%
-log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-09-30 13:56:15 UTC
-telegram: nothing new since 2026-09-30
+Traceback (most recent call last):
+  File "/home/runner/work/TimeSeriesForecaster/TimeSeriesForecaster/rank_trader.py", line 223, in <module>
+    record(log, *decide(data, days))
+                 ^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/TimeSeriesForecaster/TimeSeriesForecaster/rank_trader.py", line 136, in decide
+    parts.append(te[["time", "coin"]].assign(s=sum(b.predict(te[inputs]) for b in models_for(m, df, inputs))
+                                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/TimeSeriesForecaster/TimeSeriesForecaster/rank_trader.py", line 123, in models_for
+    for p, md in zip(paths, fit(df, month.start_time, H, inputs, SEEDS)):
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/TimeSeriesForecaster/TimeSeriesForecaster/crypto_rank.py", line 142, in fit
+    return [lgb.LGBMRegressor(random_state=seed, **PARAMS).fit(tr[inputs], tr["y"]) for seed in range(seeds)]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/lightgbm/sklearn.py", line 1478, in __init__
+    super().__init__(
+  File "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/lightgbm/sklearn.py", line 721, in __init__
+    raise LightGBMError(
+lightgbm.basic.LightGBMError: scikit-learn is required for lightgbm.sklearn. You must install scikit-learn and restart your session to use this module.
