@@ -1,11 +1,11 @@
-run started 2026-10-05 06:55:25 UTC (schedule), cached data: market-data-37183794977
+run started 2026-10-06 07:29:41 UTC (schedule), cached data: market-data-37274875932
 == update
-updated 235 coins (2 new: BEAMX ORCA); new days: 1900; latest daily candle: 2026-10-04 00:00
+updated 236 coins (1 new: RLC); new days: 1234; latest daily candle: 2026-10-05 00:00
 == step
-2026-10-05: long ADA BNB BTC   short ARB WLD ZEC   (16.7% of capital each, at the 01:00 UTC close)
+2026-10-06: long ADA NEAR SOL   short ARB ENA ZEC   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA ARB AVAX BNB BTC DOGE ENA ETH LINK LTC NEAR PEPE PUMP SOL SUI TAO UNI WLD XRP ZEC
-booked maker 0.02%: 7 days, last 2026-10-04 -0.22%, total +4.22%
-booked taker 0.05%: 7 days, last 2026-10-04 -0.25%, total +3.98%
+booked maker 0.02%: 8 days, last 2026-10-05 +0.32%, total +4.54%
+booked taker 0.05%: 8 days, last 2026-10-05 +0.29%, total +4.27%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-10-05 06:56:43 UTC
-telegram: posted 2026-10-05 (message 8)
+run finished 2026-10-06 07:30:50 UTC
+telegram: posted 2026-10-06 (message 9)
