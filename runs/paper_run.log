@@ -1,11 +1,11 @@
-run started 2026-10-08 07:16:29 UTC (schedule), cached data: market-data-37585660560
+run started 2026-10-09 07:19:45 UTC (schedule), cached data: market-data-37742403512
 == update
-updated 238 coins (1 new: MET); new days: 566; latest daily candle: 2026-10-07 00:00
+updated 238 coins (0 new: -); new days: 238; latest daily candle: 2026-10-08 00:00
 == step
-2026-10-08: long AVAX BNB PUMP   short ARB ENA ZEC   (16.7% of capital each, at the 01:00 UTC close)
+2026-10-09: long NEAR PUMP SUI   short UNI XRP ZEC   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA ARB AVAX BNB BTC DOGE ENA ETH LINK LTC NEAR PEPE PUMP SOL SUI TAO UNI WLD XRP ZEC
-booked maker 0.02%: 10 days, last 2026-10-07 +0.70%, total +5.36%
-booked taker 0.05%: 10 days, last 2026-10-07 +0.68%, total +5.04%
+booked maker 0.02%: 11 days, last 2026-10-08 +0.35%, total +5.71%
+booked taker 0.05%: 11 days, last 2026-10-08 +0.33%, total +5.37%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-10-08 07:17:29 UTC
-telegram: posted 2026-10-08 (message 11)
+run finished 2026-10-09 07:21:03 UTC
+telegram: posted 2026-10-09 (message 12)
