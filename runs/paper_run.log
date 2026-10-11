@@ -1,11 +1,11 @@
-run started 2026-10-10 06:59:22 UTC (schedule), cached data: market-data-37898367555
+run started 2026-10-11 07:04:47 UTC (schedule), cached data: market-data-38032825101
 == update
-updated 239 coins (1 new: KAIA); new days: 947; latest daily candle: 2026-10-09 00:00
+updated 240 coins (1 new: LUMIA); new days: 962; latest daily candle: 2026-10-10 00:00
 == step
-2026-10-10: long ADA BTC NEAR   short ARB PUMP ZEC   (16.7% of capital each, at the 01:00 UTC close)
+2026-10-11: long ADA BNB BTC   short ARB ENA ZEC   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA ARB AVAX BNB BTC DOGE ENA ETH LINK LTC NEAR PEPE PUMP SOL SUI TAO UNI WLD XRP ZEC
-booked maker 0.02%: 12 days, last 2026-10-09 +0.66%, total +6.36%
-booked taker 0.05%: 12 days, last 2026-10-09 +0.62%, total +5.98%
+booked maker 0.02%: 13 days, last 2026-10-10 +0.86%, total +7.23%
+booked taker 0.05%: 13 days, last 2026-10-10 +0.82%, total +6.81%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-10-10 07:00:29 UTC
-telegram: posted 2026-10-10 (message 13)
+run finished 2026-10-11 07:05:59 UTC
+telegram: posted 2026-10-11 (message 14)
