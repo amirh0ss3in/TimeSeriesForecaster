@@ -1,11 +1,11 @@
-run started 2026-10-12 07:17:21 UTC (schedule), cached data: market-data-38120149893
+run started 2026-10-13 07:39:12 UTC (schedule), cached data: market-data-38216877207
 == update
-updated 241 coins (1 new: PLUME); new days: 660; latest daily candle: 2026-10-11 00:00
+updated 243 coins (2 new: CTK PYTH); new days: 2224; latest daily candle: 2026-10-12 00:00
 == step
-2026-10-12: long AVAX BTC NEAR   short ARB ENA PUMP   (16.7% of capital each, at the 01:00 UTC close)
+2026-10-13: long NEAR PUMP SUI   short ARB BNB ETH   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA ARB AVAX BNB BTC DOGE ENA ETH LINK LTC NEAR PEPE PUMP SOL SUI TAO UNI WLD XRP ZEC
-booked maker 0.02%: 14 days, last 2026-10-11 -2.52%, total +4.71%
-booked taker 0.05%: 14 days, last 2026-10-11 -2.54%, total +4.27%
+booked maker 0.02%: 15 days, last 2026-10-12 +2.02%, total +6.73%
+booked taker 0.05%: 15 days, last 2026-10-12 +1.99%, total +6.26%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-10-12 07:18:31 UTC
-telegram: posted 2026-10-12 (message 15)
+run finished 2026-10-13 07:40:35 UTC
+telegram: posted 2026-10-13 (message 16)
