@@ -1,11 +1,11 @@
-run started 2026-10-24 05:43:27 UTC (schedule), cached data: market-data-39908720643
+run started 2026-10-25 05:59:01 UTC (schedule), cached data: market-data-40067356110
 == update
-updated 248 coins (0 new: -); new days: 248; latest daily candle: 2026-10-23 00:00
+updated 252 coins (4 new: TREE ANIME T LA); new days: 2813; latest daily candle: 2026-10-24 00:00
 == step
-2026-10-24: long BNB ETH PEPE   short ENA NEAR WLD   (16.7% of capital each, at the 01:00 UTC close)
+2026-10-25: long BNB SOL XRP   short NEAR SUI WLD   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA ARB AVAX BNB BTC DOGE ENA ETH LINK LTC NEAR PEPE PUMP SOL SUI TAO UNI WLD XRP ZEC
-booked maker 0.02%: 26 days, last 2026-10-23 -1.77%, total +8.42%
-booked taker 0.05%: 26 days, last 2026-10-23 -1.80%, total +7.57%
+booked maker 0.02%: 27 days, last 2026-10-24 +0.47%, total +8.89%
+booked taker 0.05%: 27 days, last 2026-10-24 +0.44%, total +8.01%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-10-24 05:44:31 UTC
-telegram: posted 2026-10-24 (message 27)
+run finished 2026-10-25 06:00:34 UTC
+telegram: posted 2026-10-25 (message 28)
