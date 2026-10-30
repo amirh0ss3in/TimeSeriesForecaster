@@ -1,11 +1,11 @@
-run started 2026-10-29 06:58:20 UTC (schedule), cached data: market-data-40646116222
+run started 2026-10-30 07:01:23 UTC (schedule), cached data: market-data-40832432860
 == update
-updated 255 coins (0 new: -); new days: 255; latest daily candle: 2026-10-28 00:00
+updated 257 coins (2 new: PARTI LSK); new days: 1838; latest daily candle: 2026-10-29 00:00
 == step
-2026-10-29: long BNB PEPE ZEC   short NEAR PUMP WLD   (16.7% of capital each, at the 01:00 UTC close)
+2026-10-30: long DOGE PEPE ZEC   short BTC TAO WLD   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA ARB AVAX BNB BTC DOGE ENA ETH LINK LTC NEAR PEPE PUMP SOL SUI TAO UNI WLD XRP ZEC
-booked maker 0.02%: 31 days, last 2026-10-28 +1.27%, total +12.24%
-booked taker 0.05%: 31 days, last 2026-10-28 +1.25%, total +11.27%
+booked maker 0.02%: 32 days, last 2026-10-29 +3.19%, total +15.43%
+booked taker 0.05%: 32 days, last 2026-10-29 +3.18%, total +14.45%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-10-29 06:59:48 UTC
-telegram: posted 2026-10-29 (message 32)
+run finished 2026-10-30 07:02:29 UTC
+telegram: posted 2026-10-30 (message 33)
