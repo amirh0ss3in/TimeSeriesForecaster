@@ -1,11 +1,11 @@
-run started 2026-10-31 06:55:53 UTC (schedule), cached data: market-data-41017495415
+run started 2026-11-01 07:26:04 UTC (schedule), cached data: market-data-41178541112
 == update
-updated 258 coins (1 new: SOPH); new days: 778; latest daily candle: 2026-10-30 00:00
+updated 259 coins (1 new: COW); new days: 983; latest daily candle: 2026-10-31 00:00
 == step
-2026-10-31: long PEPE XRP ZEC   short BTC ENA WLD   (16.7% of capital each, at the 01:00 UTC close)
-coins today: ADA ARB AVAX BNB BTC DOGE ENA ETH LINK LTC NEAR PEPE PUMP SOL SUI TAO UNI WLD XRP ZEC
-booked maker 0.02%: 33 days, last 2026-10-30 +0.46%, total +15.89%
-booked taker 0.05%: 33 days, last 2026-10-30 +0.43%, total +14.88%
+2026-11-01: long BTC PEPE ZEC   short NEAR QNT TRX   (16.7% of capital each, at the 01:00 UTC close)
+coins today: ADA AVAX BNB BTC DOGE ENA ETH NEAR PEPE PUMP QNT SOL STRK SUI TAO TRX UNI WLD XRP ZEC
+booked maker 0.02%: 34 days, last 2026-10-31 +0.08%, total +15.97%
+booked taker 0.05%: 34 days, last 2026-10-31 +0.06%, total +14.94%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-10-31 06:57:16 UTC
-telegram: posted 2026-10-31 (message 34)
+run finished 2026-11-01 07:27:27 UTC
+telegram: posted 2026-11-01 (message 35)
