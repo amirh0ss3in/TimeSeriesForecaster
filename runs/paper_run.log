@@ -1,11 +1,11 @@
-run started 2026-11-11 07:41:59 UTC (schedule), cached data: market-data-42781828479
+run started 2026-11-12 08:12:56 UTC (schedule), cached data: market-data-42981374077
 == update
-updated 263 coins (0 new: -); new days: 263; latest daily candle: 2026-11-10 00:00
+updated 264 coins (1 new: OPG); new days: 437; latest daily candle: 2026-11-11 00:00
 == step
-2026-11-11: long AVAX XRP ZEC   short PEPE QNT STRK   (16.7% of capital each, at the 01:00 UTC close)
+2026-11-12: long ETH SOL XRP   short PEPE UNI ZEC   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA AVAX BNB BTC DOGE ENA ETH NEAR PEPE PUMP QNT SOL STRK SUI TAO TRX UNI WLD XRP ZEC
-booked maker 0.02%: 44 days, last 2026-11-10 -1.22%, total +17.33%
-booked taker 0.05%: 44 days, last 2026-11-10 -1.26%, total +15.95%
+booked maker 0.02%: 45 days, last 2026-11-11 +3.99%, total +21.32%
+booked taker 0.05%: 45 days, last 2026-11-11 +3.95%, total +19.90%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-11-11 07:43:28 UTC
-telegram: posted 2026-11-11 (message 45)
+run finished 2026-11-12 08:14:25 UTC
+telegram: posted 2026-11-12 (message 46)
