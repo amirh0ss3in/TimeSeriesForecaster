@@ -1,11 +1,11 @@
-run started 2026-11-19 08:40:49 UTC (schedule), cached data: market-data-44267206045
+run started 2026-11-20 08:26:06 UTC (schedule), cached data: market-data-44489629791
 == update
-updated 269 coins (2 new: ZKC HEI); new days: 1341; latest daily candle: 2026-11-18 00:00
+updated 271 coins (2 new: SKY YB); new days: 1099; latest daily candle: 2026-11-19 00:00
 == step
-2026-11-19: long ENA PUMP TRX   short BNB PEPE ZEC   (16.7% of capital each, at the 01:00 UTC close)
+2026-11-20: long TAO TRX WLD   short BTC ENA STRK   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA AVAX BNB BTC DOGE ENA ETH NEAR PEPE PUMP QNT SOL STRK SUI TAO TRX UNI WLD XRP ZEC
-booked maker 0.02%: 52 days, last 2026-11-18 +1.20%, total +22.48%
-booked taker 0.05%: 52 days, last 2026-11-18 +1.15%, total +20.73%
+booked maker 0.02%: 53 days, last 2026-11-19 -0.30%, total +22.18%
+booked taker 0.05%: 53 days, last 2026-11-19 -0.34%, total +20.39%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-11-19 08:42:08 UTC
+run finished 2026-11-20 08:27:18 UTC
 telegram: sendMessage: HTTP 401: Unauthorized
