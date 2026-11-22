@@ -1,11 +1,11 @@
-run started 2026-11-21 08:13:42 UTC (schedule), cached data: market-data-44702470234
+run started 2026-11-22 07:57:04 UTC (schedule), cached data: market-data-44883845186
 == update
-updated 272 coins (1 new: KERNEL); new days: 857; latest daily candle: 2026-11-20 00:00
+updated 272 coins (0 new: -); new days: 272; latest daily candle: 2026-11-21 00:00
 == step
-2026-11-21: long ENA PUMP ZEC   short ETH TRX WLD   (16.7% of capital each, at the 01:00 UTC close)
+2026-11-22: long ENA PUMP WLD   short BTC PEPE UNI   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA AVAX BNB BTC DOGE ENA ETH NEAR PEPE PUMP QNT SOL STRK SUI TAO TRX UNI WLD XRP ZEC
-booked maker 0.02%: 54 days, last 2026-11-20 -0.57%, total +21.60%
-booked taker 0.05%: 54 days, last 2026-11-20 -0.62%, total +19.76%
+booked maker 0.02%: 55 days, last 2026-11-21 -1.09%, total +20.52%
+booked taker 0.05%: 55 days, last 2026-11-21 -1.15%, total +18.62%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-11-21 08:14:44 UTC
+run finished 2026-11-22 07:58:06 UTC
 telegram: sendMessage: HTTP 401: Unauthorized
