@@ -1,11 +1,11 @@
-run started 2026-11-26 09:24:54 UTC (schedule), cached data: market-data-45588446697
+run started 2026-11-27 09:37:14 UTC (schedule), cached data: market-data-45791687040
 == update
-updated 277 coins (3 new: MANTRA SSV MOVE); new days: 2257; latest daily candle: 2026-11-25 00:00
+updated 278 coins (1 new: ME); new days: 994; latest daily candle: 2026-11-26 00:00
 == step
-2026-11-26: long QNT STRK WLD   short NEAR PEPE ZEC   (16.7% of capital each, at the 01:00 UTC close)
+2026-11-27: long ENA PUMP STRK   short BTC PEPE ZEC   (16.7% of capital each, at the 01:00 UTC close)
 coins today: ADA AVAX BNB BTC DOGE ENA ETH NEAR PEPE PUMP QNT SOL STRK SUI TAO TRX UNI WLD XRP ZEC
-booked maker 0.02%: 59 days, last 2026-11-25 +1.02%, total +25.60%
-booked taker 0.05%: 59 days, last 2026-11-25 +0.99%, total +23.57%
+booked maker 0.02%: 60 days, last 2026-11-26 +2.14%, total +27.73%
+booked taker 0.05%: 60 days, last 2026-11-26 +2.10%, total +25.66%
 log: runs/rank_paper.json  ->  http://localhost:8000/backtest.html?run=rank_paper
-run finished 2026-11-26 09:25:57 UTC
+run finished 2026-11-27 09:38:42 UTC
 telegram: sendMessage: HTTP 401: Unauthorized
